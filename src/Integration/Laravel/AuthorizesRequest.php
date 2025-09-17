@@ -7,16 +7,12 @@ namespace Tetthys\Cake\Integration\Laravel;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Tetthys\Cake\Engine\Engine;
-use Tetthys\Cake\Model\Actor;
+use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
 use Tetthys\Cake\Model\Action;
-use Tetthys\Cake\Model\ObjectRef;
 use Tetthys\Cake\Model\Context;
+use Tetthys\Cake\Model\ObjectRef;
 use Tetthys\Cake\Rule\RuleSet;
 
-/**
- * Drop-in trait for controllers/services to authorize via Engine.
- * You provide: action name, object (model), ruleset and optional extra context.
- */
 trait AuthorizesRequest
 {
     /** Throws 403 on DENY, returns Decision on PERMIT. */
@@ -26,15 +22,18 @@ trait AuthorizesRequest
         mixed $object,
         RuleSet $rules
     ) {
+        /** @var Engine $engine */
         $engine = app(Engine::class);
 
-        $actor   = new Actor(id: (string)($request->user()?->getAuthIdentifier() ?? 'guest'),
-            roles: (array)($request->user()?->roles?->toArray() ?? []),
-            attrs: ['is_authenticated' => (bool)$request->user()]
-        );
+        /** @var ActorResolver $resolver */
+        $resolver = app(ActorResolver::class);
+        $actor    = $resolver->fromRequest($request);
 
         $action  = new Action($actionName);
-        $object  = new ObjectRef($object instanceof \Illuminate\Database\Eloquent\Model ? $object->getTable() : get_debug_type($object), $object);
+        $object  = new ObjectRef(
+            $object instanceof \Illuminate\Database\Eloquent\Model ? $object->getTable() : get_debug_type($object),
+            $object
+        );
         $context = new Context(['ip' => $request->ip(), 'now' => now()->toISOString()]);
 
         $decision = $engine->decide($actor, $action, $object, $context, $rules);

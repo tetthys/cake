@@ -3,11 +3,19 @@
   "description": "Functional, layered business authorization: S(u,a,o,c) ∧ D(u,a,o,c), deny-by-default, composable rules, and Laravel integration.",
   "type": "library",
   "license": "MIT",
-  "version": "0.0.1",
-  "autoload": {
-    "psr-4": {
-      "Tetthys\\Cake\\": "src/"
-    }
+  "version": "0.0.2",
+  "keywords": [
+    "authorization",
+    "laravel",
+    "policy",
+    "access-control",
+    "rbac",
+    "abac",
+    "functional"
+  ],
+  "support": {
+    "issues": "https://github.com/tetthys/cake/issues",
+    "source": "https://github.com/tetthys/cake"
   },
   "require": {
     "php": ">=8.1"
@@ -15,9 +23,26 @@
   "require-dev": {
     "pestphp/pest": "^3.0"
   },
+  "autoload": {
+    "psr-4": {
+      "Tetthys\\Cake\\": "src/"
+    }
+  },
+  "scripts": {
+    "test": "pest"
+  },
   "config": {
     "allow-plugins": {
       "pestphp/pest-plugin": true
     }
-  }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Tetthys\\Cake\\Integration\\Laravel\\CakeServiceProvider"
+      ]
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
 }
