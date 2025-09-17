@@ -16,7 +16,7 @@ use Tetthys\Cake\Rule\RuleSet;
 trait AuthorizesRequest
 {
     /** Throws 403 on DENY, returns Decision on PERMIT. */
-    protected function authorizeWithCake(
+    public function authorizeWithCake(
         Request $request,
         string $actionName,
         mixed $object,
