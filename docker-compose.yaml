@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  app:
+    image: composer:2
+    working_dir: /app
+    volumes:
+      - ./:/app:delegated
+    environment:
+      COMPOSER_NO_INTERACTION: "1"
+      COMPOSER_ALLOW_SUPERUSER: "1"
+    # You can pass CMD at runtime via `docker compose run`
+    # Default command is a no-op; the script below supplies the real command.
+    command: ["php", "-v"]
