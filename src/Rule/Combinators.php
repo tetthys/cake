@@ -1,4 +1,5 @@
 <?php
+// src/Rule/Combinators.php
 
 declare(strict_types=1);
 
@@ -6,86 +7,80 @@ namespace Tetthys\Cake\Rule;
 
 use Tetthys\Cake\Contracts\DomainPredicate;
 use Tetthys\Cake\Contracts\SubjectPredicate;
-use Tetthys\Cake\Model\Actor;
-use Tetthys\Cake\Model\Action;
-use Tetthys\Cake\Model\ObjectRef;
-use Tetthys\Cake\Model\Context;
+use Tetthys\Cake\Model\{Actor, Action, ObjectRef, Context};
 
 /**
- * Functional predicate combinators for S and D.
- * These mirror the paper's guidance to build policies compositionally. 
- * See: R = S ∧ D; multi-branch as OR over (Si ∧ Di). 
+ * Functional combinators for Subject/Domain predicates.
+ * Short-circuiting OR/AND/NOT for S and D.
  */
 final class Combinators
 {
-    /** @return SubjectPredicate */
-    public static function S_and(SubjectPredicate $a, SubjectPredicate $b): SubjectPredicate
+    public static function S_or(SubjectPredicate ...$ps): SubjectPredicate
     {
-        return new class($a, $b) implements SubjectPredicate {
-            public function __construct(private SubjectPredicate $x, private SubjectPredicate $y) {}
+        return new class($ps) implements SubjectPredicate {
+            public function __construct(private array $ps) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return ($this->x)($u, $a, $o, $c) && ($this->y)($u, $a, $o, $c);
+                foreach ($this->ps as $p) if ($p($u, $a, $o, $c)) return true;
+                return false;
             }
         };
     }
 
-    /** @return SubjectPredicate */
-    public static function S_or(SubjectPredicate $a, SubjectPredicate $b): SubjectPredicate
+    public static function S_and(SubjectPredicate ...$ps): SubjectPredicate
     {
-        return new class($a, $b) implements SubjectPredicate {
-            public function __construct(private SubjectPredicate $x, private SubjectPredicate $y) {}
+        return new class($ps) implements SubjectPredicate {
+            public function __construct(private array $ps) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return ($this->x)($u, $a, $o, $c) || ($this->y)($u, $a, $o, $c);
+                foreach ($this->ps as $p) if (!$p($u, $a, $o, $c)) return false;
+                return true;
             }
         };
     }
 
-    /** @return SubjectPredicate */
-    public static function S_not(SubjectPredicate $s): SubjectPredicate
+    public static function S_not(SubjectPredicate $p): SubjectPredicate
     {
-        return new class($s) implements SubjectPredicate {
-            public function __construct(private SubjectPredicate $inner) {}
+        return new class($p) implements SubjectPredicate {
+            public function __construct(private SubjectPredicate $p) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return !($this->inner)($u, $a, $o, $c);
+                return !$this->p($u, $a, $o, $c);
             }
         };
     }
 
-    /** @return DomainPredicate */
-    public static function D_and(DomainPredicate $a, DomainPredicate $b): DomainPredicate
+    public static function D_or(DomainPredicate ...$ps): DomainPredicate
     {
-        return new class($a, $b) implements DomainPredicate {
-            public function __construct(private DomainPredicate $x, private DomainPredicate $y) {}
+        return new class($ps) implements DomainPredicate {
+            public function __construct(private array $ps) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return ($this->x)($u, $a, $o, $c) && ($this->y)($u, $a, $o, $c);
+                foreach ($this->ps as $p) if ($p($u, $a, $o, $c)) return true;
+                return false;
             }
         };
     }
 
-    /** @return DomainPredicate */
-    public static function D_or(DomainPredicate $a, DomainPredicate $b): DomainPredicate
+    public static function D_and(DomainPredicate ...$ps): DomainPredicate
     {
-        return new class($a, $b) implements DomainPredicate {
-            public function __construct(private DomainPredicate $x, private DomainPredicate $y) {}
+        return new class($ps) implements DomainPredicate {
+            public function __construct(private array $ps) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return ($this->x)($u, $a, $o, $c) || ($this->y)($u, $a, $o, $c);
+                foreach ($this->ps as $p) if (!$p($u, $a, $o, $c)) return false;
+                return true;
             }
         };
     }
 
-    /** @return DomainPredicate */
-    public static function D_not(DomainPredicate $d): DomainPredicate
+    public static function D_not(DomainPredicate $p): DomainPredicate
     {
-        return new class($d) implements DomainPredicate {
-            public function __construct(private DomainPredicate $inner) {}
+        return new class($p) implements DomainPredicate {
+            public function __construct(private DomainPredicate $p) {}
             public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
             {
-                return !($this->inner)($u, $a, $o, $c);
+                return !$this->p($u, $a, $o, $c);
             }
         };
     }
