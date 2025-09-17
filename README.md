@@ -1,164 +1,194 @@
-# tetthys/cake
+# Tetthys/Cake
 
-**Functional, Layered Business Authorization for PHP & Laravel**
+> Functional & Layered Business Authorization for Laravel
 
-`tetthys/cake` provides a reusable authorization engine based on the idea of  
-**layering subject-level checks (who the user is) and domain-level checks (what the object/context allows)**.  
-It is framework-agnostic but ships with helpers for Laravel integration.
+Cake provides a **simple but rigorous authorization model** for business rules.  
+Instead of scattering `if` checks everywhere, you define **rules** (`RuleSet`) that combine:
 
----
+- **S (SubjectPredicate)** → Who is trying to do the action?  
+- **D (DomainPredicate)** → Under what conditions on the object/context?  
 
-## 🔑 Core Idea
-
-Every authorization rule is defined as:
-
-$$
-R(u, a, o, c) = S(u, a, o, c) \; \land \; D(u, a, o, c)
-$$
-
-- **S** → Subject condition (user role, identity, authentication, global permissions)  
-- **D** → Domain condition (object state, relationships, business rules, context)  
-- **R** → Authorization rule. Permit only if both S and D are true.  
-
-Multiple rules can be combined:
-
-$$
-R = (S_1 \land D_1) \; \lor \; (S_2 \land D_2) \; \lor \; \dots \; \lor \; (S_n \land D_n)
-$$
-
-If no rule matches → **deny by default**.
+Access is granted **only if** S ∧ D is satisfied.  
+Otherwise: **deny-by-default**.
 
 ---
 
-## 🏗️ Layered Architecture
+## Why Cake?
 
-```mermaid
-flowchart TD
-    A[Request Entry] --> B[Middleware Layer]
-    B -->|Check S (Subject)| C[Business Service Layer]
-    C -->|Check D (Domain)| D[Permit or Deny]
+- ✅ Clear separation of **who** (roles, ownership) vs **when/what** (domain state)  
+- ✅ Composable rules (use `Combinators` for OR/AND/NOT)  
+- ✅ Laravel-ready: works with middleware & policies  
+- ✅ Testable: `RuleSet` is pure logic, easy to unit test  
+- ✅ Deny-by-default: safe by construction
 
-    B -.->|Fail| X[403 Forbidden]
-    C -.->|Fail| X
+---
+
+## Quick Example (Blog Post)
+
+### 1. Define Rules
+
+```php
+// app/Policies/PostRules.php
+namespace App\Policies;
+
+use Illuminate\Http\Request;
+use Tetthys\Cake\Rule\{Rule, RuleSet, Combinators as C};
+use Tetthys\Cake\Rule\Pred;
+
+final class PostRules
+{
+    /**
+     * Action: post.view
+     * - Anyone can view if post is published
+     * - Owner can always view
+     */
+    public function view(Request $request): RuleSet
+    {
+        return new RuleSet([
+            new Rule(
+                'Owner_Always',
+                Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id),
+                Pred::D(fn() => true)
+            ),
+            new Rule(
+                'Published_ForAll',
+                Pred::S(fn() => true),
+                Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'published')
+            ),
+        ]);
+    }
+
+    /**
+     * Action: post.update
+     * - Only owner or admin, when post is still a draft
+     */
+    public function update(Request $request): RuleSet
+    {
+        $user = $request->user();
+
+        return new RuleSet([
+            new Rule(
+                'OwnerOrAdmin_WhenDraft',
+                C::S_or(
+                    Pred::S(fn($u) => $u->id === $request->route('post')->user_id),
+                    Pred::S(fn() => $user?->isAdmin() ?? false)
+                ),
+                Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft')
+            ),
+        ]);
+    }
+}
 ````
 
-* **Middleware layer** → subject checks (roles, auth, global flags)
-* **Service/domain layer** → domain checks (object state, business rules)
-* **Defense in depth** → both layers must succeed.
+### 2. Use in Routes
 
----
+```php
+use App\Http\Controllers\PostController;
 
-## ✨ Features
+Route::get('posts/{post}', [PostController::class, 'show'])
+    ->middleware('cake:post.view,App\\Policies\\PostRules@view')
+    ->name('post.view');
 
-* **Formal but simple model**: `R = S ∧ D`
-* **Composable**: combine rules with AND / OR / NOT
-* **Deny-by-default**: safety guaranteed
-* **Functional style**: policies are pure functions, easy to test
-* **Explainable decisions**: trace shows why access was allowed/denied
-* **Laravel ready**: middleware and traits included
-
----
-
-## 📦 Installation
-
-```bash
-composer require tetthys/cake
+Route::put('posts/{post}', [PostController::class, 'update'])
+    ->middleware('cake:post.update,App\\Policies\\PostRules@update')
+    ->name('post.update');
 ```
 
 ---
 
-## 🚀 Quick Example
+## Built-in Helpers
+
+You can compose rules with small building blocks.
+
+### Predicates
 
 ```php
-use Tetthys\Cake\Model\Actor;
-use Tetthys\Cake\Model\Action;
-use Tetthys\Cake\Model\ObjectRef;
-use Tetthys\Cake\Model\Context;
-use Tetthys\Cake\Engine\Engine;
-use Tetthys\Cake\Rule\Rule;
-use Tetthys\Cake\Rule\RuleSet;
-use Tetthys\Cake\Contracts\SubjectPredicate;
-use Tetthys\Cake\Contracts\DomainPredicate;
+Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id)   // Subject
+Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft')   // Domain
+```
 
-$isManager = new class implements SubjectPredicate {
-    public function __invoke($u, $a, $o, $c): bool {
-        return in_array('manager', $u->roles, true);
-    }
-};
+### Combinators
 
-$isLargePendingOrder = new class implements DomainPredicate {
-    public function __invoke($u, $a, $o, $c): bool {
-        return ($o->data->status ?? null) === 'PENDING'
-            && ($o->data->amount ?? 0) >= 10_000_000;
-    }
-};
-
-$rules = new RuleSet([
-    new Rule('ManagerCanApprove', $isManager, $isLargePendingOrder),
-]);
-
-$engine = new Engine();
-
-$actor   = new Actor(id: 1, roles: ['manager']);
-$action  = new Action('order.approve');
-$object  = new ObjectRef('Order', (object)['status' => 'PENDING', 'amount' => 12_000_000]);
-$context = new Context([]);
-
-$decision = $engine->decide($actor, $action, $object, $context, $rules);
-
-echo $decision->outcome; // "PERMIT"
-print_r($decision->trace);
+```php
+C::S_or($s1, $s2)  // subject1 OR subject2
+C::S_and($s1, $s2) // both must hold
+C::D_not($d)       // domain negation
 ```
 
 ---
 
-## 🧩 Laravel Integration
+## End-to-End Example
 
-### 1. Register middleware
+### Owner can always view
 
-```php
-// app/Http/Kernel.php
-protected $routeMiddleware = [
-    'cake' => \Tetthys\Cake\Integration\Laravel\AuthorizationMiddleware::class,
-];
-```
-
-### 2. Define rules factory
+### Everyone can view only when published
 
 ```php
-final class OrderRules {
-    public function approve(Request $request): RuleSet {
-        // return a RuleSet with subject/domain predicates
-    }
+public function view(Request $request): RuleSet
+{
+    return new RuleSet([
+        new Rule(
+            'Owner_Always',
+            Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id),
+            Pred::D(fn() => true)
+        ),
+        new Rule(
+            'Published_ForAll',
+            Pred::S(fn() => true),
+            Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'published')
+        ),
+    ]);
 }
 ```
 
-### 3. Protect a route
+---
+
+## Installation
+
+```bash
+composer require tetthys/cake:^0.0.2
+```
+
+Laravel will auto-discover the service provider.
+
+---
+
+## Testing a Rule
 
 ```php
-Route::post('/orders/{order}/approve', [OrderController::class, 'approve'])
-    ->middleware('cake:order.approve,App\\Policies\\OrderRules@approve');
+use Tetthys\Cake\Engine\Engine;
+use Tetthys\Cake\Model\{Actor, Action, ObjectRef, Context};
+
+$engine = app(Engine::class);
+
+$decision = $engine->decide(
+    new Actor('1', [], []),
+    new Action('post.view'),
+    new ObjectRef('Post', $post),
+    new Context([]),
+    app(\App\Policies\PostRules::class)->view(request())
+);
+
+if ($decision->isPermit()) {
+    // allowed
+} else {
+    // denied
+}
 ```
 
 ---
 
-## 🧪 Testing
+## Summary
 
-This repo uses [Pest](https://pestphp.com).
-We include Docker setup for isolated test runs:
+* **Declarative**: describe who + when in one place
+* **Composable**: reuse predicates, combine them with `Combinators`
+* **Safe**: deny-by-default, so you never forget an edge case
+* **Laravel-friendly**: drop-in middleware `cake:action,Policy@method`
 
-```bash
-bash ./run/test.sh
-```
-
-Filter tests:
-
-```bash
-bash ./run/test.sh --filter Engine
-```
+Cake makes your **authorization layer as clean and testable** as the rest of your code.
 
 ---
 
-## 📝 License
+## License
 
 MIT © Tetthys
