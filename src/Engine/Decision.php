@@ -14,9 +14,9 @@ final readonly class Decision
     public const DENY = "DENY";
 
     /**
-     * @param string   $outcome      One of self::PERMIT|self::DENY
-     * @param string[] $trace        Sequence of evaluation notes (e.g., "[Rule] match/no-match")
-     * @param string|null $selectedRule  The rule name that permitted, if any
+     * @param string        $outcome       One of self::PERMIT|self::DENY
+     * @param array<int,string> $trace     Evaluation steps (e.g. "[Rule] match/no-match")
+     * @param string|null   $selectedRule  The rule name that permitted, if any
      */
     private function __construct(
         public string $outcome,
@@ -33,7 +33,7 @@ final readonly class Decision
     /** Factory: DENY with trace. */
     public static function deny(array $trace = []): self
     {
-        return new self(self::DENY, $trace, null);
+        return new self(self::DENY, $trace);
     }
 
     /** True when outcome is PERMIT. */

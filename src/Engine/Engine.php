@@ -25,23 +25,16 @@ final class Engine
     ): Decision {
         $trace = [];
 
-        // Support both iterable RuleSet and legacy `$rules->rules` array.
-        $iterable = is_iterable($rules)
-            ? $rules
-            : (property_exists($rules, "rules") && is_iterable($rules->rules)
-                ? $rules->rules
-                : []);
-
-        foreach ($iterable as $rule) {
+        foreach ($rules as $rule) {
             $ok = $rule->matches($u, $a, $o, $c);
-            $trace[] = \sprintf("[%s] %s", $rule->name, $ok ? "match" : "no-match");
+            $trace[] = sprintf("[%s] %s", $rule->name, $ok ? "match" : "no-match");
 
             if ($ok) {
                 return Decision::permit($rule->name, $trace);
             }
         }
 
-        // Safety by default: deny when no S∧D branch is satisfied.
+        // Deny-by-default: if no (S ∧ D) branch matches.
         return Decision::deny($trace);
     }
 }
