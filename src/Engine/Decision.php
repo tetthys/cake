@@ -8,30 +8,43 @@ namespace Tetthys\Cake\Engine;
  * Decision is either PERMIT or DENY, with trace for audit/explainability.
  * Deny-by-default is enforced by Engine when no rule matches.
  */
-final class Decision
+final readonly class Decision
 {
     public const PERMIT = "PERMIT";
     public const DENY = "DENY";
 
-    /** @param string[] $trace rule names/reasons checked/selected */
+    /**
+     * @param string   $outcome      One of self::PERMIT|self::DENY
+     * @param string[] $trace        Sequence of evaluation notes (e.g., "[Rule] match/no-match")
+     * @param string|null $selectedRule  The rule name that permitted, if any
+     */
     private function __construct(
-        public readonly string $outcome,
-        public readonly array $trace = [],
-        public readonly ?string $selectedRule = null,
+        public string $outcome,
+        public array $trace = [],
+        public ?string $selectedRule = null,
     ) {}
 
+    /** Factory: PERMIT with selected rule name and trace. */
     public static function permit(string $ruleName, array $trace = []): self
     {
         return new self(self::PERMIT, $trace, $ruleName);
     }
 
+    /** Factory: DENY with trace. */
     public static function deny(array $trace = []): self
     {
         return new self(self::DENY, $trace, null);
     }
 
+    /** True when outcome is PERMIT. */
     public function isPermit(): bool
     {
         return $this->outcome === self::PERMIT;
+    }
+
+    /** True when outcome is DENY. */
+    public function isDeny(): bool
+    {
+        return $this->outcome === self::DENY;
     }
 }

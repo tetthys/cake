@@ -11,22 +11,37 @@ use Tetthys\Cake\Model\Context;
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
- * Engine evaluates R = OR_i (Si ∧ Di). If any rule matches => PERMIT, else DENY.
- * This directly operationalizes the paper's S-and-D normalization and layered checks. 
+ * Engine evaluates: R = OR_i (Si ∧ Di)
+ * If any rule matches => PERMIT, else DENY (deny-by-default).
  */
 final class Engine
 {
-    public function decide(Actor $u, Action $a, ObjectRef $o, Context $c, RuleSet $rules): Decision
-    {
+    public function decide(
+        Actor $u,
+        Action $a,
+        ObjectRef $o,
+        Context $c,
+        RuleSet $rules,
+    ): Decision {
         $trace = [];
-        foreach ($rules->rules as $rule) {
+
+        // Support both iterable RuleSet and legacy `$rules->rules` array.
+        $iterable = is_iterable($rules)
+            ? $rules
+            : (property_exists($rules, "rules") && is_iterable($rules->rules)
+                ? $rules->rules
+                : []);
+
+        foreach ($iterable as $rule) {
             $ok = $rule->matches($u, $a, $o, $c);
-            $trace[] = sprintf('[%s] %s', $rule->name, $ok ? 'match' : 'no-match');
+            $trace[] = \sprintf("[%s] %s", $rule->name, $ok ? "match" : "no-match");
+
             if ($ok) {
                 return Decision::permit($rule->name, $trace);
             }
         }
-        // deny-by-default — if no S∧D branch is satisfied, deny. (Safety by default)
+
+        // Safety by default: deny when no S∧D branch is satisfied.
         return Decision::deny($trace);
     }
 }
