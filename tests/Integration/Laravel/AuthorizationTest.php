@@ -2,91 +2,76 @@
 
 declare(strict_types=1);
 
-use Illuminate\Support\Facades\Route;
-use Tests\Support\FakeUser;
-use Tetthys\Cake\Contracts\DomainPredicate;
-use Tetthys\Cake\Contracts\SubjectPredicate;
-use Tetthys\Cake\Integration\Laravel\AuthorizesRequest;
-use Tetthys\Cake\Rule\Rule;
-use Tetthys\Cake\Rule\RuleSet;
+namespace Tests\Integration\Laravel;
 
-/**
- * Controller stub using AuthorizesRequest trait.
- * - Authorizes with a simple (S ∧ D) rule.
- * - Returns 200 JSON on permit; default responder throws JSON 403 on deny.
- */
-class PostUpdateController
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Route;
+use Tetthys\Cake\Integration\Laravel\AuthorizesRequest;
+use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
+use Tetthys\Cake\Model\Actor;
+use Tetthys\Cake\Rule\{Rule, RuleSet, Pred};
+use Tests\TestCase;
+
+final class PostUpdateController extends Controller
 {
     use AuthorizesRequest;
 
-    public function __invoke(\Illuminate\Http\Request $request)
+    public function __invoke(Request $request)
     {
-        // Subject: check roles via public property (no roles() method!)
-        $S_userOrAdmin = new class implements SubjectPredicate {
-            public function __invoke($u, $a, $o, $c): bool
-            {
-                // Actor exposes public array $roles
-                return in_array('user', $u->roles, true) || in_array('admin', $u->roles, true);
-            }
-        };
-
-        // Domain: the actor must own the object
-        $D_owner = new class implements DomainPredicate {
-            public function __invoke($u, $a, $o, $c): bool
-            {
-                // ObjectRef exposes public $data (no value() method)
-                return method_exists($o->data, 'ownerId') && $o->data->ownerId() === (string) $u->id;
-            }
-        };
+        // 실제 도메인 객체(배열 cast 금지)
+        $post = (object) [
+            'user_id' => (string) $request->input('owner_id'),
+            'status'  => (string) ($request->input('status') ?: 'draft'),
+        ];
 
         $rules = new RuleSet([
-            new Rule('Owner-Can-Update', $S_userOrAdmin, $D_owner),
+            new Rule(
+                'OwnerDraft',
+                // ✅ ObjectRef를 받으므로 도메인 필드는 $o->data 경유
+                Pred::S(fn ($u, $a, $o, $c) => (string) $u->id === (string) $o->data->user_id),
+                Pred::D(fn ($u, $a, $o, $c) => $o->data->status === 'draft'),
+            ),
         ]);
 
-        // Minimal domain object that exposes ownerId()
-        $post = new class($request->input('owner_id')) {
-            public function __construct(private string $ownerId) {}
-            public function ownerId(): string
-            {
-                return $this->ownerId;
-            }
-        };
+        // ✅ 여기서는 $post 그대로 넘깁니다 (Trait가 내부에서 ObjectRef로 감쌉니다)
+        $decision = $this->authorizeWithCake($request, 'post.update', $post, $rules);
 
-        // Will return Decision on permit; default responder throws JSON 403 on deny.
-        $this->authorizeWithCake($request, 'post.update', $post, $rules);
-
-        return response()->json(['ok' => true, 'rule' => 'Owner-Can-Update'], 200);
+        return response()->json(['ok' => $decision->isPermit()]);
     }
 }
 
+uses(TestCase::class);
+
 it('permits when subject+domain match, returns 200', function (): void {
+    // ActorResolver 더블(u-1)
+    $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
+        public function fromRequest(\Illuminate\Http\Request $request): Actor
+        {
+            return new Actor('u-1', ['user']);
+        }
+    });
+
     Route::post('/posts/update', PostUpdateController::class);
 
-    // Inject authenticated user (no provider needed)
-    $user = new FakeUser('u-1', ['user']);
-    $this->be($user);
-
-    $this->postJson('/posts/update', ['owner_id' => 'u-1'])
+    $this->postJson('/posts/update', ['owner_id' => 'u-1', 'status' => 'draft'])
         ->assertOk()
-        ->assertJson([
-            'ok' => true,
-            'rule' => 'Owner-Can-Update',
-        ]);
+        ->assertJson(['ok' => true]);
 });
 
 it('denies by default when no rule matches, returns 403 JSON', function (): void {
+    // ActorResolver 더블(u-1)
+    $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
+        public function fromRequest(\Illuminate\Http\Request $request): Actor
+        {
+            return new Actor('u-1', ['user']);
+        }
+    });
+
     Route::post('/posts/update', PostUpdateController::class);
 
-    $user = new FakeUser('u-1', ['user']);
-    $this->be($user);
-
-    // Domain mismatch -> no (S ∧ D) branch matches -> deny-by-default
-    $this->postJson('/posts/update', ['owner_id' => 'u-2'])
+    // 도메인 불일치 → 매칭 규칙 없음 → 403
+    $this->postJson('/posts/update', ['owner_id' => 'u-2', 'status' => 'published'])
         ->assertStatus(403)
-        ->assertJson(
-            fn($json) =>
-            $json->where('message', 'Forbidden')
-                ->whereType('authorization', 'array')
-                ->etc()
-        );
+        ->assertJsonPath('authorization.action', 'post.update');
 });

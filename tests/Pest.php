@@ -1,24 +1,10 @@
 <?php
 
-use Orchestra\Testbench\TestCase as BaseTestCase;
+declare(strict_types=1);
 
-class TestCase extends BaseTestCase
-{
-    protected function getPackageProviders($app)
-    {
-        return [Tetthys\Cake\Integration\Laravel\CakeServiceProvider::class];
-    }
+use Tests\TestCase;
 
-    protected function defineEnvironment($app): void
-    {
-        // Only set app key; no custom auth provider needed when using $this->be()
-        $app["config"]->set("app.key", "base64:" . base64_encode(random_bytes(32)));
-        $app["config"]->set("auth.defaults.guard", "web");
-        $app["config"]->set("auth.guards.web", [
-            "driver" => "session",
-            "provider" => "users", // will not be used with $this->be()
-        ]);
-    }
-}
+$dirs = ['Feature', 'Pipeline', 'Rule', 'Support'];
+$paths = array_map(fn(string $d): string => __DIR__ . DIRECTORY_SEPARATOR . $d, $dirs);
 
-uses(TestCase::class)->in(__DIR__);
+uses(TestCase::class)->in(...$paths);
