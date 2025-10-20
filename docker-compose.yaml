@@ -1,14 +1,17 @@
-version: "3.9"
-
 services:
-  app:
-    image: composer:2
+  php:
+    build:
+      context: .
+      dockerfile: Dockerfile
     working_dir: /app
-    volumes:
-      - ./:/app:delegated
+    tty: true
     environment:
-      COMPOSER_NO_INTERACTION: "1"
-      COMPOSER_ALLOW_SUPERUSER: "1"
-    # You can pass CMD at runtime via `docker compose run`
-    # Default command is a no-op; the script below supplies the real command.
-    command: ["php", "-v"]
+      COMPOSER_CACHE_DIR: /tmp/composer-cache
+      # COMPOSER_ROOT_VERSION can be overridden here if you prefer:
+      # COMPOSER_ROOT_VERSION: dev-main
+    volumes:
+      - ./:/app
+      - composer-cache:/tmp/composer-cache
+
+volumes:
+  composer-cache:
