@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Tetthys\Cake\Integration\Laravel;
 
-use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Tetthys\Cake\Engine\Engine;
 use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
+use Tetthys\Cake\Integration\Laravel\Contracts\AuthorizationResponder;
 use Tetthys\Cake\Model\Action;
 use Tetthys\Cake\Model\Context;
 use Tetthys\Cake\Model\ObjectRef;
@@ -15,13 +15,15 @@ use Tetthys\Cake\Rule\RuleSet;
 
 trait AuthorizesRequest
 {
-    /** Throws 403 on DENY, returns Decision on PERMIT. */
+    /**
+     * Returns whatever the AuthorizationResponder returns (default: Decision on PERMIT, throws on DENY).
+     */
     public function authorizeWithCake(
         Request $request,
         string $actionName,
         mixed $object,
         RuleSet $rules,
-    ) {
+    ): mixed {
         /** @var Engine $engine */
         $engine = app(Engine::class);
 
@@ -43,20 +45,10 @@ trait AuthorizesRequest
 
         $decision = $engine->decide($actor, $action, $object, $context, $rules);
 
-        if (!$decision->isPermit()) {
-            throw new HttpResponseException(
-                response()->json(
-                    [
-                        "message" => "Forbidden",
-                        "authorization" => [
-                            "action" => $actionName,
-                            "trace" => $decision->trace,
-                        ],
-                    ],
-                    403,
-                ),
-            );
-        }
-        return $decision;
+        /** @var AuthorizationResponder $responder */
+        $responder = app(AuthorizationResponder::class);
+
+        // Delegate final handling to the responder (DI-pluggable).
+        return $responder->respond($request, $action, $object, $context, $decision);
     }
 }
