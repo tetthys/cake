@@ -11,8 +11,9 @@ use Tetthys\Cake\Rule\Rule;
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
- * Controller stub that uses AuthorizesRequest trait.
- * It authorizes the request with given rules and returns 200 on permit.
+ * Controller stub using AuthorizesRequest trait.
+ * - Authorizes with a simple (S ∧ D) rule.
+ * - Returns 200 JSON on permit; default responder throws JSON 403 on deny.
  */
 class PostUpdateController
 {
@@ -20,24 +21,30 @@ class PostUpdateController
 
     public function __invoke(\Illuminate\Http\Request $request)
     {
-        // Build rules inline for test
-        $S_user = new class implements SubjectPredicate {
+        // Subject: check roles via public property (no roles() method!)
+        $S_userOrAdmin = new class implements SubjectPredicate {
             public function __invoke($u, $a, $o, $c): bool
             {
-                return in_array("user", $u->roles(), true) ||
-                    in_array("admin", $u->roles(), true);
+                // Actor exposes public array $roles
+                return in_array('user', $u->roles, true) || in_array('admin', $u->roles, true);
             }
         };
+
+        // Domain: the actor must own the object
         $D_owner = new class implements DomainPredicate {
             public function __invoke($u, $a, $o, $c): bool
             {
-                return method_exists($o->value(), "ownerId") &&
-                    $o->value()->ownerId() === $u->id();
+                // ObjectRef exposes public $data (no value() method)
+                return method_exists($o->data, 'ownerId') && $o->data->ownerId() === (string) $u->id;
             }
         };
-        $rules = new RuleSet([new Rule("Owner-Can-Update", $S_user, $D_owner)]);
 
-        $post = new class($request->input("owner_id")) {
+        $rules = new RuleSet([
+            new Rule('Owner-Can-Update', $S_userOrAdmin, $D_owner),
+        ]);
+
+        // Minimal domain object that exposes ownerId()
+        $post = new class($request->input('owner_id')) {
             public function __construct(private string $ownerId) {}
             public function ownerId(): string
             {
@@ -45,42 +52,41 @@ class PostUpdateController
             }
         };
 
-        // Will throw HttpResponseException(403 JSON) on DENY by default responder.
-        $this->authorizeWithCake($request, "post.update", $post, $rules);
+        // Will return Decision on permit; default responder throws JSON 403 on deny.
+        $this->authorizeWithCake($request, 'post.update', $post, $rules);
 
-        return response()->json(["ok" => true, "rule" => "Owner-Can-Update"], 200);
+        return response()->json(['ok' => true, 'rule' => 'Owner-Can-Update'], 200);
     }
 }
 
-it("permits when subject+domain match, returns 200", function () {
-    // Define the route for this test case
-    Route::post("/posts/update", PostUpdateController::class);
+it('permits when subject+domain match, returns 200', function (): void {
+    Route::post('/posts/update', PostUpdateController::class);
 
-    // User owns the post
-    $user = new FakeUser("u-1", ["user"]);
+    // Inject authenticated user (no provider needed)
+    $user = new FakeUser('u-1', ['user']);
+    $this->be($user);
 
-    $this->actingAs($user)
-        ->postJson("/posts/update", ["owner_id" => "u-1"])
+    $this->postJson('/posts/update', ['owner_id' => 'u-1'])
         ->assertOk()
         ->assertJson([
-            "ok" => true,
-            "rule" => "Owner-Can-Update",
+            'ok' => true,
+            'rule' => 'Owner-Can-Update',
         ]);
 });
 
-it("denies by default when no rule matches, returns 403 JSON", function () {
-    Route::post("/posts/update", PostUpdateController::class);
+it('denies by default when no rule matches, returns 403 JSON', function (): void {
+    Route::post('/posts/update', PostUpdateController::class);
 
-    // User does not own the post
-    $user = new FakeUser("u-1", ["user"]);
+    $user = new FakeUser('u-1', ['user']);
+    $this->be($user);
 
-    $this->actingAs($user)
-        ->postJson("/posts/update", ["owner_id" => "u-2"])
+    // Domain mismatch -> no (S ∧ D) branch matches -> deny-by-default
+    $this->postJson('/posts/update', ['owner_id' => 'u-2'])
         ->assertStatus(403)
         ->assertJson(
-            fn($json) => $json
-                ->where("message", "Forbidden")
-                ->whereType("authorization", "array")
-                ->etc(),
+            fn($json) =>
+            $json->where('message', 'Forbidden')
+                ->whereType('authorization', 'array')
+                ->etc()
         );
 });
