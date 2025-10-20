@@ -2,28 +2,73 @@
 
 > Functional & Layered Business Authorization for Laravel
 
-Cake provides a **simple but rigorous authorization model** for business rules.  
-Instead of scattering `if` checks everywhere, you define **rules** (`RuleSet`) that combine:
+**Cake** brings a functional approach to complex business authorization.
+Instead of scattering `if` statements across controllers or policies, you declare composable **rules** that describe **who** can do **what** under **which conditions**.
 
-- **S (SubjectPredicate)** → Who is trying to do the action?  
-- **D (DomainPredicate)** → Under what conditions on the object/context?  
-
-Access is granted **only if** S ∧ D is satisfied.  
-Otherwise: **deny-by-default**.
+It’s simple, expressive, and safe — **deny-by-default**.
 
 ---
 
-## Why Cake?
+## 🧩 Concept Overview
 
-- ✅ Clear separation of **who** (roles, ownership) vs **when/what** (domain state)  
-- ✅ Composable rules (use `Combinators` for OR/AND/NOT)  
-- ✅ Laravel-ready: works with middleware & policies  
-- ✅ Testable: `RuleSet` is pure logic, easy to unit test  
-- ✅ Deny-by-default: safe by construction
+Authorization in Cake is expressed as:
+
+```
+Decision = OR_i (Sᵢ ∧ Dᵢ)
+```
+
+* **S (SubjectPredicate)** → Who is the actor? (roles, identity, membership)
+* **D (DomainPredicate)** → Under what conditions? (object state, context, timing)
+
+If **any** `(S ∧ D)` pair is true, access is granted (`PERMIT`);
+otherwise, it’s denied by default (`DENY`).
 
 ---
 
-## Quick Example (Blog Post)
+## 🚀 Why Cake?
+
+* ✅ **Separation of concerns** — keep “who” vs “when/what” clearly distinct
+* ✅ **Composable** — use functional `Combinators` for OR / AND / NOT
+* ✅ **Framework-agnostic core**, with **Laravel integration** out of the box
+* ✅ **Testable** — pure functions, no global state
+* ✅ **Secure by design** — deny-by-default, no accidental leaks
+
+---
+
+## ⚙️ Installation
+
+```bash
+composer require tetthys/cake:^0.0.2
+```
+
+Laravel will auto-discover the service provider:
+
+```json
+"extra": {
+  "laravel": {
+    "providers": [
+      "Tetthys\\Cake\\Integration\\Laravel\\CakeServiceProvider"
+    ]
+  }
+}
+```
+
+---
+
+## 🧠 Core Idea: S ∧ D → Decision
+
+Every `Rule` combines:
+
+| Component | Meaning                       | Example                        |
+| --------- | ----------------------------- | ------------------------------ |
+| `S`       | Subject predicate (who?)      | `$u->hasRole('admin')`         |
+| `D`       | Domain predicate (when/what?) | `$o->data->status === 'draft'` |
+
+Access is **granted** if any rule’s S∧D returns true.
+
+---
+
+## 🪄 Quick Start (Blog Example)
 
 ### 1. Define Rules
 
@@ -32,16 +77,11 @@ Otherwise: **deny-by-default**.
 namespace App\Policies;
 
 use Illuminate\Http\Request;
-use Tetthys\Cake\Rule\{Rule, RuleSet, Combinators as C};
-use Tetthys\Cake\Rule\Pred;
+use Tetthys\Cake\Rule\{Rule, RuleSet, Combinators as C, Pred};
 
 final class PostRules
 {
-    /**
-     * Action: post.view
-     * - Anyone can view if post is published
-     * - Owner can always view
-     */
+    /** Anyone can view if published; owner can always view */
     public function view(Request $request): RuleSet
     {
         return new RuleSet([
@@ -58,37 +98,55 @@ final class PostRules
         ]);
     }
 
-    /**
-     * Action: post.update
-     * - Only owner or admin, when post is still a draft
-     */
+    /** Only owner or admin can update when post is draft */
     public function update(Request $request): RuleSet
     {
-        $user = $request->user();
+        $post = $request->route('post');
 
         return new RuleSet([
             new Rule(
                 'OwnerOrAdmin_WhenDraft',
                 C::S_or(
-                    Pred::S(fn($u) => $u->id === $request->route('post')->user_id),
-                    Pred::S(fn() => $user?->isAdmin() ?? false)
+                    Pred::S(fn($u) => $u->id === $post->user_id),
+                    Pred::S(fn($u) => $u?->isAdmin() ?? false)
                 ),
                 Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft')
             ),
         ]);
     }
 }
-````
+```
 
-### 2. Use in Routes
+---
+
+### 2. Apply in Controllers or Middleware
 
 ```php
-use App\Http\Controllers\PostController;
+use Tetthys\Cake\Integration\Laravel\AuthorizesRequest;
+use App\Policies\PostRules;
 
-Route::get('posts/{post}', [PostController::class, 'show'])
-    ->middleware('cake:post.view,App\\Policies\\PostRules@view')
-    ->name('post.view');
+class PostController
+{
+    use AuthorizesRequest;
 
+    public function update(Request $request, Post $post)
+    {
+        $decision = $this->authorizeWithCake(
+            $request,
+            'post.update',
+            $post,
+            app(PostRules::class)->update($request)
+        );
+
+        // Continue only if authorized
+        return response()->json(['status' => 'ok', 'authorized' => $decision->isPermit()]);
+    }
+}
+```
+
+Or attach via middleware:
+
+```php
 Route::put('posts/{post}', [PostController::class, 'update'])
     ->middleware('cake:post.update,App\\Policies\\PostRules@update')
     ->name('post.update');
@@ -96,99 +154,104 @@ Route::put('posts/{post}', [PostController::class, 'update'])
 
 ---
 
-## Built-in Helpers
-
-You can compose rules with small building blocks.
+## 🧱 Built-in Helpers
 
 ### Predicates
 
+Wrap any closure into a functional predicate:
+
 ```php
-Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id)   // Subject
-Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft')   // Domain
+Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id); // SubjectPredicate
+Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft'); // DomainPredicate
 ```
 
 ### Combinators
 
-```php
-C::S_or($s1, $s2)  // subject1 OR subject2
-C::S_and($s1, $s2) // both must hold
-C::D_not($d)       // domain negation
-```
-
----
-
-## End-to-End Example
-
-### Owner can always view
-
-### Everyone can view only when published
+Compose predicates:
 
 ```php
-public function view(Request $request): RuleSet
-{
-    return new RuleSet([
-        new Rule(
-            'Owner_Always',
-            Pred::S(fn($u, $a, $o, $c) => $u->id === $o->data->user_id),
-            Pred::D(fn() => true)
-        ),
-        new Rule(
-            'Published_ForAll',
-            Pred::S(fn() => true),
-            Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'published')
-        ),
-    ]);
-}
+use Tetthys\Cake\Rule\Combinators as C;
+
+C::S_or($s1, $s2);  // subject1 OR subject2
+C::S_and($s1, $s2); // both must hold
+C::D_not($d);       // negate a domain predicate
 ```
 
 ---
 
-## Installation
+## 🧪 Testing Rules
 
-```bash
-composer require tetthys/cake:^0.0.2
-```
-
-Laravel will auto-discover the service provider.
-
----
-
-## Testing a Rule
+Cake is designed for **pure, unit-testable logic**.
 
 ```php
 use Tetthys\Cake\Engine\Engine;
 use Tetthys\Cake\Model\{Actor, Action, ObjectRef, Context};
+use App\Policies\PostRules;
 
 $engine = app(Engine::class);
 
 $decision = $engine->decide(
-    new Actor('1', [], []),
-    new Action('post.view'),
-    new ObjectRef('Post', $post),
-    new Context([]),
-    app(\App\Policies\PostRules::class)->view(request())
+    new Actor('u-1', ['user']),
+    new Action('post.update'),
+    new ObjectRef('Post', (object)['user_id' => 'u-1', 'status' => 'draft']),
+    new Context(['ip' => '127.0.0.1']),
+    app(PostRules::class)->update(request())
 );
 
-if ($decision->isPermit()) {
-    // allowed
-} else {
-    // denied
-}
+expect($decision->isPermit())->toBeTrue();
+expect($decision->selectedRule)->toBe('OwnerOrAdmin_WhenDraft');
 ```
 
 ---
 
-## Summary
+## 🔍 Example Decisions
 
-* **Declarative**: describe who + when in one place
-* **Composable**: reuse predicates, combine them with `Combinators`
-* **Safe**: deny-by-default, so you never forget an edge case
-* **Laravel-friendly**: drop-in middleware `cake:action,Policy@method`
-
-Cake makes your **authorization layer as clean and testable** as the rest of your code.
+| Situation               | Expected | Rule Triggered           |
+| ----------------------- | -------- | ------------------------ |
+| Owner updating draft    | ✅ Permit | `OwnerOrAdmin_WhenDraft` |
+| Admin updating draft    | ✅ Permit | `OwnerOrAdmin_WhenDraft` |
+| User updating published | ❌ Deny   | (no rule matched)        |
 
 ---
 
-## License
+## 🧩 Advanced Usage
+
+### Combine Predicates Dynamically
+
+```php
+use Tetthys\Cake\Rule\{Pred, Combinators as C};
+
+$isAdmin   = Pred::S(fn($u) => $u->role === 'admin');
+$isOwner   = Pred::S(fn($u, $a, $o) => $o->data->user_id === $u->id);
+$isDraft   = Pred::D(fn($u, $a, $o) => $o->data->status === 'draft');
+
+$rule = new Rule('AdminOrOwner_WhenDraft', C::S_or($isAdmin, $isOwner), $isDraft);
+```
+
+---
+
+## 🧭 Integration Points
+
+| Layer                 | How to Integrate                                                  |
+| --------------------- | ----------------------------------------------------------------- |
+| **Controllers**       | `use AuthorizesRequest` trait                                     |
+| **Middleware**        | `cake:action,Policy@method`                                       |
+| **Custom Resolvers**  | Implement `ActorResolver` to derive actor from JWT, API key, etc. |
+| **Custom Responders** | Replace `DefaultJson403Responder` for custom error formats        |
+
+---
+
+## ✅ Summary
+
+| Principle         | Description                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| **Declarative**   | Express access logic in `RuleSet`, not imperative `if` chains |
+| **Composable**    | Build logic with `Combinators` and reusable `Pred` blocks     |
+| **Secure**        | Deny-by-default for unhandled cases                           |
+| **Laravel-Ready** | Works with routes, middleware, controllers                    |
+
+---
+
+## 🧾 License
 
 MIT © Tetthys
