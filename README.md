@@ -38,7 +38,7 @@ otherwise, it’s denied by default (`DENY`).
 ## ⚙️ Installation
 
 ```bash
-composer require tetthys/cake:^0.0.2
+composer require tetthys/cake
 ```
 
 Laravel will auto-discover the service provider:
