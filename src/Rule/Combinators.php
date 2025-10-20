@@ -19,9 +19,17 @@ final class Combinators
     {
         return new class($ps) implements SubjectPredicate {
             public function __construct(private array $ps) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
-                foreach ($this->ps as $p) if ($p($u, $a, $o, $c)) return true;
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
+                foreach ($this->ps as $p) {
+                    if ($p($u, $a, $o, $c)) {
+                        return true;
+                    }
+                }
                 return false;
             }
         };
@@ -31,9 +39,17 @@ final class Combinators
     {
         return new class($ps) implements SubjectPredicate {
             public function __construct(private array $ps) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
-                foreach ($this->ps as $p) if (!$p($u, $a, $o, $c)) return false;
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
+                foreach ($this->ps as $p) {
+                    if (!$p($u, $a, $o, $c)) {
+                        return false;
+                    }
+                }
                 return true;
             }
         };
@@ -43,8 +59,12 @@ final class Combinators
     {
         return new class($p) implements SubjectPredicate {
             public function __construct(private SubjectPredicate $p) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
                 return !$this->p($u, $a, $o, $c);
             }
         };
@@ -54,9 +74,17 @@ final class Combinators
     {
         return new class($ps) implements DomainPredicate {
             public function __construct(private array $ps) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
-                foreach ($this->ps as $p) if ($p($u, $a, $o, $c)) return true;
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
+                foreach ($this->ps as $p) {
+                    if ($p($u, $a, $o, $c)) {
+                        return true;
+                    }
+                }
                 return false;
             }
         };
@@ -66,9 +94,17 @@ final class Combinators
     {
         return new class($ps) implements DomainPredicate {
             public function __construct(private array $ps) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
-                foreach ($this->ps as $p) if (!$p($u, $a, $o, $c)) return false;
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
+                foreach ($this->ps as $p) {
+                    if (!$p($u, $a, $o, $c)) {
+                        return false;
+                    }
+                }
                 return true;
             }
         };
@@ -78,8 +114,12 @@ final class Combinators
     {
         return new class($p) implements DomainPredicate {
             public function __construct(private DomainPredicate $p) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
                 return !$this->p($u, $a, $o, $c);
             }
         };

@@ -10,14 +10,14 @@ namespace Tetthys\Cake\Engine;
  */
 final class Decision
 {
-    public const PERMIT = 'PERMIT';
-    public const DENY   = 'DENY';
+    public const PERMIT = "PERMIT";
+    public const DENY = "DENY";
 
     /** @param string[] $trace rule names/reasons checked/selected */
     private function __construct(
         public readonly string $outcome,
         public readonly array $trace = [],
-        public readonly ?string $selectedRule = null
+        public readonly ?string $selectedRule = null,
     ) {}
 
     public static function permit(string $ruleName, array $trace = []): self
@@ -30,5 +30,8 @@ final class Decision
         return new self(self::DENY, $trace, null);
     }
 
-    public function isPermit(): bool { return $this->outcome === self::PERMIT; }
+    public function isPermit(): bool
+    {
+        return $this->outcome === self::PERMIT;
+    }
 }

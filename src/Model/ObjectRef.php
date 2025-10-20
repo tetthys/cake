@@ -12,6 +12,6 @@ final class ObjectRef
 {
     public function __construct(
         public readonly string $type,
-        public readonly mixed $data
+        public readonly mixed $data,
     ) {}
 }

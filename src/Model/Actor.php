@@ -14,6 +14,6 @@ final class Actor
     public function __construct(
         public readonly string|int $id,
         public readonly array $roles = [],
-        public readonly array $attrs = []
+        public readonly array $attrs = [],
     ) {}
 }

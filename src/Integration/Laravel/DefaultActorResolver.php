@@ -15,12 +15,12 @@ final class DefaultActorResolver implements ActorResolver
         $user = $request->user();
 
         return new Actor(
-            id: (string)($user?->getAuthIdentifier() ?? 'guest'),
-            roles: (array)($user?->roles?->toArray() ?? []),
+            id: (string) ($user?->getAuthIdentifier() ?? "guest"),
+            roles: (array) ($user?->roles?->toArray() ?? []),
             attrs: [
-                'is_authenticated' => (bool) $user,
+                "is_authenticated" => (bool) $user,
                 // Pass the full User model so predicates can call methods like isAdmin()
-                'subject'          => $user,
+                "subject" => $user,
             ],
         );
     }

@@ -20,8 +20,12 @@ final class Pred
     {
         return new class($fn) implements SubjectPredicate {
             public function __construct(private \Closure $fn) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
                 return ($this->fn)($u, $a, $o, $c);
             }
         };
@@ -32,8 +36,12 @@ final class Pred
     {
         return new class($fn) implements DomainPredicate {
             public function __construct(private \Closure $fn) {}
-            public function __invoke(Actor $u, Action $a, ObjectRef $o, Context $c): bool
-            {
+            public function __invoke(
+                Actor $u,
+                Action $a,
+                ObjectRef $o,
+                Context $c,
+            ): bool {
                 return ($this->fn)($u, $a, $o, $c);
             }
         };

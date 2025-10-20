@@ -24,7 +24,7 @@ final class Rule
         public readonly string $name,
         private SubjectPredicate $S,
         private DomainPredicate $D,
-        public readonly ?string $reason = null
+        public readonly ?string $reason = null,
     ) {}
 
     public function matches(Actor $u, Action $a, ObjectRef $o, Context $c): bool
