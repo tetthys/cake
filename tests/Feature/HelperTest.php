@@ -8,7 +8,7 @@ use Tetthys\Cake\Rule\{Rule, RuleSet, Pred};
 use function Tetthys\Cake\Integration\Laravel\cakeCan;
 
 beforeEach(function () {
-    // 기본 액터: u-1
+    // Default actor (u-1)
     $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
@@ -16,6 +16,7 @@ beforeEach(function () {
         }
     });
 
+    // Define a simple Policy used for Class@method and auto-inference tests
     if (!class_exists(\App\Policies\PostRules::class)) {
         eval(<<<'PHP'
         namespace App\Policies;
@@ -30,8 +31,9 @@ beforeEach(function () {
                 return new RuleSet([
                     new Rule(
                         'OwnerDraft',
-                        Pred::S(fn($u,$a,$o) => (string)$u->id === (string)$o->data->user_id),
-                        Pred::D(fn($u,$a,$o) => $o->data->status === 'draft'),
+                        // ObjectRef is passed as $o → actual domain object is $o->data
+                        Pred::S(fn($u, $a, $o, $c) => (string)$u->id === (string)$o->data->user_id),
+                        Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft'),
                     ),
                 ]);
             }
@@ -46,9 +48,8 @@ test('cakeCan permits with explicit RuleSet when subject+domain match', function
     $rules = new RuleSet([
         new Rule(
             'OwnerDraft',
-            // ✅ ObjectRef를 받으므로 data를 통해 접근해야 합니다.
-            Pred::S(fn ($u, $a, $o) => (string) $u->id === (string) $o->data->user_id),
-            Pred::D(fn ($u, $a, $o) => $o->data->status === 'draft'),
+            Pred::S(fn($u, $a, $o, $c) => (string)$u->id === (string)$o->data->user_id),
+            Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft'),
         ),
     ]);
 
@@ -56,7 +57,7 @@ test('cakeCan permits with explicit RuleSet when subject+domain match', function
 });
 
 test('cakeCan denies with Class@method when not owner or not draft', function () {
-    // 비소유자 u-2로 교체
+    // Switch actor → non-owner (u-2)
     $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
@@ -64,12 +65,12 @@ test('cakeCan denies with Class@method when not owner or not draft', function ()
         }
     });
 
-    $post = (object)['user_id' => 'u-1', 'status' => 'published']; // 도메인 불일치
+    $post = (object)['user_id' => 'u-1', 'status' => 'published']; // domain mismatch
     expect(cakeCan('post.update', $post, \App\Policies\PostRules::class.'@update'))->toBeFalse();
 });
 
-test('cakeCan auto-inferrs App\\Policies\\{Base}Rules@{method} from action+object', function () {
-    // 소유자 u-9로 교체
+test('cakeCan auto-infers App\\Policies\\{Base}Rules@{method} from action+object', function () {
+    // Switch actor → owner (u-9)
     $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
@@ -77,7 +78,7 @@ test('cakeCan auto-inferrs App\\Policies\\{Base}Rules@{method} from action+objec
         }
     });
 
-    // 자동 추론용 Post 클래스
+    // Minimal Post model for inference
     if (!class_exists(\App\Models\Post::class)) {
         eval(<<<'PHP'
         namespace App\Models;
@@ -89,5 +90,6 @@ test('cakeCan auto-inferrs App\\Policies\\{Base}Rules@{method} from action+objec
     $post->user_id = 'u-9';
     $post->status  = 'draft';
 
-    expect(cakeCan('post.update', $post))->toBeTrue(); // auto: App\Policies\PostRules@update
+    // Should resolve to App\Policies\PostRules@update automatically
+    expect(cakeCan('post.update', $post))->toBeTrue();
 });

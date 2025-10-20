@@ -6,7 +6,7 @@ use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
 use Tetthys\Cake\Model\Actor;
 
 beforeEach(function () {
-    // 기본 액터(u-1)
+    // Default actor (u-1)
     $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
@@ -14,7 +14,7 @@ beforeEach(function () {
         }
     });
 
-    // 자동 추론 및 Class@method 테스트용 Policy
+    // Policy for auto-inference and explicit Class@method tests
     if (!class_exists(\App\Policies\PostRules::class)) {
         eval(<<<'PHP'
         namespace App\Policies;
@@ -29,8 +29,9 @@ beforeEach(function () {
                 return new RuleSet([
                     new Rule(
                         'OwnerDraft',
-                        Pred::S(fn($u,$a,$o) => (string)$u->id === (string)$o->data->user_id),
-                        Pred::D(fn($u,$a,$o) => $o->data->status === 'draft'),
+                        // IMPORTANT: ObjectRef is passed as $o; the real domain object is in $o->data
+                        Pred::S(fn($u, $a, $o, $c) => (string)$u->id === (string)$o->data->user_id),
+                        Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft'),
                     ),
                 ]);
             }
@@ -38,7 +39,7 @@ beforeEach(function () {
         PHP);
     }
 
-    // 자동 추론에서 사용할 Post 클래스
+    // Minimal Post class for auto-inference scenario
     if (!class_exists(\App\Models\Post::class)) {
         eval(<<<'PHP'
         namespace App\Models;
@@ -70,7 +71,7 @@ BLADE;
 });
 
 test('cake cannot renders when permission is false', function () {
-    // 액터를 소유자가 아니도록 교체
+    // Swap actor so that they are NOT the owner
     $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
@@ -80,7 +81,7 @@ test('cake cannot renders when permission is false', function () {
 
     $post = new \App\Models\Post();
     $post->user_id = 'u-1';
-    $post->status  = 'published'; // 도메인 불일치
+    $post->status  = 'published'; // Domain mismatch (not draft)
 
     $view = <<<'BLADE'
 @php
