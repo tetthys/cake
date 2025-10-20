@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Tetthys\Cake\Integration\Laravel;
+namespace Tetthys\Cake\Integration\Laravel\Resolvers;
 
 use Illuminate\Http\Request;
 use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;

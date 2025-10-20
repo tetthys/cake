@@ -9,6 +9,7 @@ use Tetthys\Cake\Engine\Engine;
 use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
 use Tetthys\Cake\Integration\Laravel\Contracts\AuthorizationResponder;
 use Tetthys\Cake\Integration\Laravel\Responders\DefaultJson403Responder;
+use Tetthys\Cake\Integration\Laravel\Resolvers\DefaultActorResolver;
 
 final class CakeServiceProvider extends ServiceProvider
 {
