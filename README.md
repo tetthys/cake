@@ -1,9 +1,6 @@
 # Tetthys/Cake
 
-> Functional & Layered Business Authorization for Laravel
-
-Cake is a **functional, composable authorization layer** for Laravel.
-It replaces imperative `if` checks and tangled policy logic with **declarative, testable RuleSets**.
+> Functional & Layered Authorization for Laravel — Declarative, Composable, Testable
 
 ---
 
@@ -13,7 +10,7 @@ It replaces imperative `if` checks and tangled policy logic with **declarative, 
 composer require tetthys/cake
 ```
 
-Laravel auto-discovers the provider:
+Laravel auto-discovers the service provider:
 
 ```json
 "extra": {
@@ -25,11 +22,17 @@ Laravel auto-discovers the provider:
 }
 ```
 
+Once installed, Cake automatically registers:
+
+* `@cakeCan` / `@cakeCannot` Blade directives
+* `cake` middleware
+* global helper `cakeCan()`
+
 ---
 
-## 🪄 Basic Usage
+## 🚀 Quick Usage
 
-### 1️⃣ Define Rules
+### 🧩 1. Define Rules
 
 ```php
 // app/Policies/PostRules.php
@@ -42,12 +45,14 @@ final class PostRules
 {
     public function update(Request $request): RuleSet
     {
+        $post = $request->route('post');
+
         return new RuleSet([
             new Rule(
                 'OwnerOrAdmin_WhenDraft',
                 C::S_or(
-                    Pred::S(fn($u) => $u->id === $request->route('post')->user_id),
-                    Pred::S(fn($u) => in_array('admin', $u->roles))
+                    Pred::S(fn($u) => $u->id === $post->user_id),
+                    Pred::S(fn($u) => in_array('admin', $u->roles, true))
                 ),
                 Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft')
             ),
@@ -56,14 +61,16 @@ final class PostRules
 }
 ```
 
-* **`S`** = Subject condition (who)
-* **`D`** = Domain condition (when/what)
-* `RuleSet` = a collection of `(S ∧ D)` rules
-  → if any rule matches, it **permits**; otherwise it **denies**.
+> * **S** → Subject condition (who)
+> * **D** → Domain condition (when/what)
+> * A `RuleSet` is a list of `(S ∧ D)` rules.
+>   If any matches → **Permit**, otherwise → **Deny (by default)**
 
 ---
 
-### 2️⃣ Use in Controllers
+### 🧱 2. Controller Integration
+
+Use the built-in trait `AuthorizesRequest`.
 
 ```php
 use Tetthys\Cake\Integration\Laravel\AuthorizesRequest;
@@ -82,25 +89,21 @@ class PostController
             app(PostRules::class)->update($request)
         );
 
-        if (! $decision->isPermit()) {
-            abort(403, 'Forbidden by Cake rules');
-        }
-
-        // Continue...
-        return response()->json(['ok' => true]);
+        // Decision implements isPermit() / isDeny()
+        return response()->json(['ok' => $decision->isPermit()]);
     }
 }
 ```
 
 ---
 
-### 3️⃣ Or Use in Blade
+### 🪶 3. Blade Directives
 
 ```blade
 @cakeCan('post.update', $post)
   <button>✏️ Edit</button>
 @else
-  <p class="text-gray">You cannot edit this post</p>
+  <p>You cannot edit this post.</p>
 @endcakeCan
 
 @cakeCannot('post.update', $post)
@@ -108,26 +111,58 @@ class PostController
 @endcakeCannot
 ```
 
-* Blade directives resolve `App\Policies\PostRules@update` automatically.
-* You can also pass explicit `Class@method` or a `RuleSet` object.
+✅ Automatically infers `App\Policies\PostRules@update` from action name + object type.
+You can also pass:
+
+* Explicit `"App\\Policies\\PostRules@update"` string, or
+* A pre-built `RuleSet` instance.
 
 ---
 
-### 4️⃣ Quick Helper
+### ⚡ 4. Middleware (Route-Level)
+
+You can authorize before the controller executes.
+
+```php
+// explicit
+Route::put('/posts/{post}', [PostController::class, 'update'])
+    ->middleware('cake:post.update,App\\Policies\\PostRules@update');
+```
+
+or just use the shorthand — automatic inference:
+
+```php
+// automatic inference -> App\Policies\PostRules@update
+Route::put('/posts/{post}', [PostController::class, 'update'])
+    ->middleware('cake:post.update');
+```
+
+> Cake finds your route model (`{post}`), infers `"App\Policies\PostRules@update"`,
+> and denies (403) if no rule matches.
+
+---
+
+### 🧩 5. Helper Function
 
 ```php
 use function Tetthys\Cake\Integration\Laravel\cakeCan;
 
 if (cakeCan('post.update', $post)) {
-    // permit
+    // Do something only if permitted
 }
 ```
 
-Cake auto-detects your policy class and rule method from the action name and object type.
+This helper can take:
+
+* action string (`'post.update'`)
+* model or object
+* optional `RuleSet` or `"Class@method"` string
+
+If omitted, Cake will infer the policy automatically.
 
 ---
 
-## 🧪 Testing
+### 🧪 6. Testing
 
 ```php
 use Tetthys\Cake\Engine\Engine;
@@ -147,44 +182,19 @@ $decision = $engine->decide(
 expect($decision->isPermit())->toBeTrue();
 ```
 
----
-
-## 🔧 Middleware Integration
-
-```php
-Route::put('/posts/{post}', [PostController::class, 'update'])
-    ->middleware('cake:post.update,App\\Policies\\PostRules@update');
-```
-
-Automatically authorizes the request before hitting the controller.
+Because rules are **pure functions**, you can test them without HTTP or Laravel context.
 
 ---
 
-## 🧩 Advanced Examples
+## 🧠 Key Features
 
-### Combine predicates dynamically
-
-```php
-use Tetthys\Cake\Rule\{Pred, Combinators as C};
-
-$isOwner = Pred::S(fn($u, $a, $o) => $o->data->user_id === $u->id);
-$isAdmin = Pred::S(fn($u) => in_array('admin', $u->roles));
-$isDraft = Pred::D(fn($u, $a, $o) => $o->data->status === 'draft');
-
-$rule = new Rule('AdminOrOwner_WhenDraft', C::S_or($isOwner, $isAdmin), $isDraft);
-```
-
----
-
-## 🧠 Key Principles
-
-| Principle         | Description                                        |
-| ----------------- | -------------------------------------------------- |
-| **Declarative**   | Rules describe access, not enforce it directly     |
-| **Composable**    | Combine S/D predicates with AND / OR / NOT         |
-| **Testable**      | Functional & pure, no global state                 |
-| **Secure**        | Deny-by-default: no fallback “permit”              |
-| **Laravel Ready** | Use via Blade, controllers, middleware, or helpers |
+| Feature           | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| **Declarative**   | Express access as composable predicates, not `if` trees |
+| **Composable**    | Combine `S` and `D` with AND / OR / NOT                 |
+| **Secure**        | Deny-by-default — no implicit permits                   |
+| **Laravel-Ready** | Works in controllers, Blade, middleware, and helpers    |
+| **Functional**    | Stateless and testable, rule logic is pure PHP          |
 
 ---
 

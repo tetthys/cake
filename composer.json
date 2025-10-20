@@ -1,6 +1,6 @@
 {
   "name": "tetthys/cake",
-  "description": "Functional, layered business authorization: S(u,a,o,c) ∧ D(u,a,o,c), deny-by-default, composable rules, and Laravel integration.",
+  "description": "Functional & Layered Authorization for Laravel — Declarative, Composable, Testable",
   "type": "library",
   "license": "MIT",
   "keywords": [
