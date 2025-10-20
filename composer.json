@@ -3,7 +3,6 @@
   "description": "Functional, layered business authorization: S(u,a,o,c) ∧ D(u,a,o,c), deny-by-default, composable rules, and Laravel integration.",
   "type": "library",
   "license": "MIT",
-  "version": "0.1.0",
   "keywords": [
     "authorization",
     "laravel",
