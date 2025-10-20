@@ -17,7 +17,7 @@
     "source": "https://github.com/tetthys/cake"
   },
   "require": {
-    "php": ">=8.1"
+    "php": ">=8.3"
   },
   "require-dev": {
     "pestphp/pest": "^3.0",
