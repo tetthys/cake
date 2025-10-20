@@ -6,19 +6,23 @@ namespace Tetthys\Cake\Integration\Laravel;
 
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Support\Str;
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
  * Supports both:
  *  - cake:post.update,App\Policies\PostRules@update  (explicit)
- *  - cake:post.update                                (auto-infer policy from route model)
+ *  - cake:post.update                                (auto-infer policy)
+ *
+ * Auto-infer order:
+ *  1) If a route-model/object exists: App\Policies\{ClassBase}Rules@{method}
+ *  2) Fallback to action's domain:   App\Policies\{Studly(domain)}Rules@{method}
  */
 final class AuthorizationMiddleware
 {
     /**
-     * @param  string       $actionName   e.g. "post.update"
-     * @param  string|null  $rulesFactory Optional "Class@method" factory; if null, auto-infer.
+     * @param string      $actionName   e.g. "post.update"
+     * @param string|null $rulesFactory Optional "Class@method"; if null, auto-infer.
      */
     public function handle(
         Request $request,
@@ -26,8 +30,8 @@ final class AuthorizationMiddleware
         string $actionName,
         ?string $rulesFactory = null,
     ) {
-        // 1) Resolve domain object from route (first object-like param; eloquent or plain object)
-        $object = $this->resolveObjectFromRoute($request) ?? (object) [];
+        // 1) Resolve domain object from route (eloquent model or any object)
+        $object = $this->resolveObjectFromRoute($request);
 
         // 2) Resolve policy class & method (explicit or auto)
         [$policyClass, $policyMethod] = $this->resolvePolicyAndMethod(
@@ -71,17 +75,29 @@ final class AuthorizationMiddleware
             use AuthorizesRequest;
         };
 
-        // This will throw on DENY (via AuthorizationResponder), otherwise proceed.
-        $trait->authorizeWithCake($request, $actionName, $object, $rules);
+        // Throws on DENY; otherwise continue.
+        $trait->authorizeWithCake(
+            $request,
+            $actionName,
+            $object ?? new \stdClass(),
+            $rules,
+        );
 
         return $next($request);
     }
 
-    /** Pick the first object-like route parameter (Eloquent model or any object). */
+    /** Prefer an Eloquent model; otherwise the first object-like route param; otherwise null. */
     private function resolveObjectFromRoute(Request $request): ?object
     {
         $params = $request->route()?->parameters() ?? [];
 
+        // Prefer Eloquent model
+        foreach ($params as $value) {
+            if ($value instanceof \Illuminate\Database\Eloquent\Model) {
+                return $value;
+            }
+        }
+        // Any object
         foreach ($params as $value) {
             if (is_object($value)) {
                 return $value;
@@ -93,13 +109,15 @@ final class AuthorizationMiddleware
     /**
      * Resolve [policyClass, method] either from explicit "Class@method" or by auto-inference.
      *
-     * Auto-infer rules:
-     * - method: suffix of actionName after ".", e.g. "post.update" -> "update"
-     * - class : "App\Policies\{Base}Rules" where {Base} is class_basename($object)
+     * Auto-infer:
+     * - method = suffix after ".", e.g. "post.update" -> "update" (no dot => whole action)
+     * - try classes in order:
+     *     a) App\Policies\{class_basename(object)}Rules
+     *     b) App\Policies\{Studly(domain)}Rules  (domain = prefix before ".")
      */
     private function resolvePolicyAndMethod(
         string $actionName,
-        object $object,
+        ?object $object,
         ?string $rulesFactory,
     ): array {
         // Explicit "Class@method"
@@ -111,29 +129,52 @@ final class AuthorizationMiddleware
             return [$class, $method];
         }
 
-        // Auto method: "post.update" -> "update"
-        $method = str_contains($actionName, ".")
-            ? explode(".", $actionName, 2)[1]
-            : $actionName;
+        // Parse action => [domain, method]
+        [$domain, $method] = $this->parseAction($actionName);
 
-        // Auto class: "App\Policies\{Base}Rules"
-        $fqcn = $object::class;
-        $base =
-            ($pos = strrpos($fqcn, "\\")) === false ? $fqcn : substr($fqcn, $pos + 1);
-        $class = "App\\Policies\\{$base}Rules";
+        // Build candidate classes
+        $candidates = [];
 
-        if (!class_exists($class)) {
-            abort(
-                500,
-                sprintf(
-                    'Auto-inferred policy class "%s" does not exist for action "%s". ' .
-                        'Pass an explicit "Class@method" or create the policy.',
-                    $class,
-                    $actionName,
-                ),
-            );
+        // a) From object class (when meaningful)
+        if ($object && ($base = class_basename($object)) && $base !== "stdClass") {
+            $candidates[] = "App\\Policies\\{$base}Rules";
         }
 
-        return [$class, $method];
+        // b) Fallback from action domain
+        if ($domain !== null) {
+            $candidates[] = "App\\Policies\\" . Str::studly($domain) . "Rules";
+        }
+
+        // Pick the first existing class
+        foreach ($candidates as $class) {
+            if (class_exists($class)) {
+                return [$class, $method];
+            }
+        }
+
+        // Nothing found → fail with a helpful message
+        $hint = $candidates
+            ? "Tried: " . implode(", ", $candidates)
+            : "No candidates could be inferred.";
+        abort(
+            500,
+            sprintf(
+                '[Cake] Could not infer policy for action "%s". %s ' .
+                    'Define one of the suggested classes or pass an explicit "Class@method".',
+                $actionName,
+                $hint,
+            ),
+        );
+    }
+
+    /** @return array{0:?string,1:string} [domain|null, method] */
+    private function parseAction(string $actionName): array
+    {
+        if (!str_contains($actionName, ".")) {
+            // No dot → no domain, entire string is method
+            return [null, $actionName];
+        }
+        [$domain, $method] = explode(".", $actionName, 2);
+        return [$domain, $method];
     }
 }
