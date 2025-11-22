@@ -11,8 +11,8 @@ use Tetthys\Cake\Model\Context;
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
- * Engine evaluates: R = OR_i (Si ∧ Di)
- * If any rule matches => PERMIT, else DENY (deny-by-default).
+ * The Engine is responsible for making authorization decisions
+ * based on the provided Actor, Action, ObjectRef, Context, and RuleSet.
  */
 final class Engine
 {
@@ -24,17 +24,22 @@ final class Engine
         RuleSet $rules,
     ): Decision {
         $trace = [];
+        $evaluatedAnyRule = false;
 
         foreach ($rules as $rule) {
+            $evaluatedAnyRule = true;
             $ok = $rule->matches($u, $a, $o, $c);
             $trace[] = sprintf("[%s] %s", $rule->name, $ok ? "match" : "no-match");
 
-            if ($ok) {
-                return Decision::permit($rule->name, $trace);
+            if (!$ok) {
+                return Decision::deny($trace);
             }
         }
 
-        // Deny-by-default: if no (S ∧ D) branch matches.
-        return Decision::deny($trace);
+        if (!$evaluatedAnyRule) {
+            return Decision::deny($trace);
+        }
+
+        return Decision::permit('all-rules', $trace);
     }
 }
