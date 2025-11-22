@@ -102,7 +102,7 @@ function resolveCakeRules(
     }
 
     $method = str_contains($action, ".") ? explode(".", $action, 2)[1] : "index";
-    $base = $object ? class_basename($object::class ?? (string) $object) : null;
+    $base = $object ? class_basename(is_object($object) ? $object : (string) $object) : null;
     if (!$base) {
         throw new \InvalidArgumentException("Cannot infer rules without object");
     }
