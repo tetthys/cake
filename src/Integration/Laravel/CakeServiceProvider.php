@@ -47,12 +47,25 @@ final class CakeServiceProvider extends ServiceProvider
         // 3) Blade directives (@cakeCan / @cakeCannot)
         if (\class_exists(Blade::class)) {
             Blade::if(
+                "cake",
+                fn(
+                    string $action,
+                    mixed $object = null,
+                    mixed $rules = null,
+                ) => \Tetthys\Cake\Integration\Laravel\cake(
+                    $action,
+                    $object,
+                    $rules,
+                ),
+            );
+
+            Blade::if(
                 "cakeCan",
                 fn(
                     string $action,
                     mixed $object = null,
                     mixed $rules = null,
-                ) => \Tetthys\Cake\Integration\Laravel\cakeCan(
+                ) => \Tetthys\Cake\Integration\Laravel\cake(
                     $action,
                     $object,
                     $rules,
@@ -65,7 +78,7 @@ final class CakeServiceProvider extends ServiceProvider
                     string $action,
                     mixed $object = null,
                     mixed $rules = null,
-                ) => !\Tetthys\Cake\Integration\Laravel\cakeCan(
+                ) => !\Tetthys\Cake\Integration\Laravel\cake(
                     $action,
                     $object,
                     $rules,

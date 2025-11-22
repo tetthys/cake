@@ -5,11 +5,11 @@ declare(strict_types=1);
 use Tetthys\Cake\Integration\Laravel\Contracts\ActorResolver;
 use Tetthys\Cake\Model\Actor;
 use Tetthys\Cake\Rule\{Rule, RuleSet, Pred};
-use function Tetthys\Cake\Integration\Laravel\cakeCan;
+use function Tetthys\Cake\Integration\Laravel\cake;
 
 beforeEach(function () {
     // Default actor (u-1)
-    $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
+    $this->app->bind(ActorResolver::class, fn() => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
             return new Actor('u-1', ['user']);
@@ -42,7 +42,7 @@ beforeEach(function () {
     }
 });
 
-test('cakeCan permits with explicit RuleSet when subject+domain match', function () {
+test('cake permits with explicit RuleSet when subject+domain match', function () {
     $post = (object)['user_id' => 'u-1', 'status' => 'draft'];
 
     $rules = new RuleSet([
@@ -53,12 +53,12 @@ test('cakeCan permits with explicit RuleSet when subject+domain match', function
         ),
     ]);
 
-    expect(cakeCan('post.update', $post, $rules))->toBeTrue();
+    expect(cake('post.update', $post, $rules))->toBeTrue();
 });
 
-test('cakeCan denies with Class@method when not owner or not draft', function () {
+test('cake denies with Class@method when not owner or not draft', function () {
     // Switch actor → non-owner (u-2)
-    $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
+    $this->app->bind(ActorResolver::class, fn() => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
             return new Actor('u-2', ['user']);
@@ -66,12 +66,12 @@ test('cakeCan denies with Class@method when not owner or not draft', function ()
     });
 
     $post = (object)['user_id' => 'u-1', 'status' => 'published']; // domain mismatch
-    expect(cakeCan('post.update', $post, \App\Policies\PostRules::class.'@update'))->toBeFalse();
+    expect(cake('post.update', $post, \App\Policies\PostRules::class . '@update'))->toBeFalse();
 });
 
-test('cakeCan auto-infers App\\Policies\\{Base}Rules@{method} from action+object', function () {
+test('cake auto-infers App\\Policies\\{Base}Rules@{method} from action+object', function () {
     // Switch actor → owner (u-9)
-    $this->app->bind(ActorResolver::class, fn () => new class implements ActorResolver {
+    $this->app->bind(ActorResolver::class, fn() => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
         {
             return new Actor('u-9', ['user']);
@@ -91,5 +91,5 @@ test('cakeCan auto-infers App\\Policies\\{Base}Rules@{method} from action+object
     $post->status  = 'draft';
 
     // Should resolve to App\Policies\PostRules@update automatically
-    expect(cakeCan('post.update', $post))->toBeTrue();
+    expect(cake('post.update', $post))->toBeTrue();
 });

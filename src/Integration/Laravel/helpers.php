@@ -12,40 +12,64 @@ use Tetthys\Cake\Model\{Action, Context, ObjectRef};
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
- * cakeCan - minimal and flexible permission helper.
+ * cake - minimal and flexible permission helper.
  *
  * @param string $action  e.g. 'post.update'
  * @param mixed $object   domain object (Eloquent, DTO, stdClass)
  * @param RuleSet|callable|string|null $rules
  */
-function cakeCan(
+function cake(
     string $action,
     mixed $object = null,
     mixed $rules = null,
+    ?Request $request = null,
+    ?Engine $engine = null,
+    ?ActorResolver $resolver = null,
+    ?Container $container = null,
 ): bool {
-    /** @var Container $app */
-    $app = app();
-    $request = $app->make(Request::class);
-    $engine = $app->make(Engine::class);
-    $resolver = $app->make(ActorResolver::class);
+    $container ??= app();
+    $request ??= $container->make(Request::class);
+    $engine ??= $container->make(Engine::class);
+    $resolver ??= $container->make(ActorResolver::class);
 
-    $actor = $resolver->fromRequest($request);
-    $actionV = new Action($action);
-    $objectV = new ObjectRef(
+    return decideCake($engine, $resolver, $request, $action, $object, $rules);
+}
+
+function decideCake(
+    Engine $engine,
+    ActorResolver $resolver,
+    Request $request,
+    string $action,
+    mixed $object,
+    mixed $rules,
+): bool {
+    return $engine
+        ->decide(
+            $resolver->fromRequest($request),
+            new Action($action),
+            buildObjectRef($object),
+            buildContext($request),
+            resolveCakeRules($rules, $request, $action, $object),
+        )
+        ->isPermit();
+}
+
+function buildObjectRef(mixed $object): ObjectRef
+{
+    return new ObjectRef(
         $object instanceof \Illuminate\Database\Eloquent\Model
             ? $object->getTable()
             : get_debug_type($object),
         $object,
     );
-    $context = new Context([
-        "ip" => $request->ip(),
-        "now" => now()->toISOString(),
-    ]);
+}
 
-    $ruleSet = resolveCakeRules($rules, $request, $action, $object);
-    return $engine
-        ->decide($actor, $actionV, $objectV, $context, $ruleSet)
-        ->isPermit();
+function buildContext(Request $request): Context
+{
+    return new Context([
+        'ip' => $request->ip(),
+        'now' => now()->toISOString(),
+    ]);
 }
 
 /**
@@ -77,7 +101,6 @@ function resolveCakeRules(
             : throw new \TypeError("{$class}@{$method} must return RuleSet");
     }
 
-    // Auto infer from action/object
     $method = str_contains($action, ".") ? explode(".", $action, 2)[1] : "index";
     $base = $object ? class_basename($object::class ?? (string) $object) : null;
     if (!$base) {
