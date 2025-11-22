@@ -101,15 +101,26 @@ function resolveCakeRules(
             : throw new \TypeError("{$class}@{$method} must return RuleSet");
     }
 
-    $method = str_contains($action, ".") ? explode(".", $action, 2)[1] : "index";
-    $base = $object ? class_basename(is_object($object) ? $object : (string) $object) : null;
-    if (!$base) {
-        throw new \InvalidArgumentException("Cannot infer rules without object");
-    }
-    $class = "App\\Policies\\{$base}Rules";
+    [$resource, $actionMethod] = str_contains($action, ".")
+        ? explode(".", $action, 2)
+        : [null, null];
+    $method = $actionMethod ?: "index";
 
+    $base = null;
+    if ($object) {
+        $base = class_basename(is_object($object) ? $object : (string) $object);
+    } elseif ($resource) {
+        $base = \Illuminate\Support\Str::studly($resource);
+    }
+
+    if (!$base) {
+        throw new \InvalidArgumentException("Cannot infer rules without object or resource");
+    }
+
+    $class = "App\\Policies\\{$base}Rules";
     $policy = app($class);
     $result = $policy->{$method}($request);
+
     return $result instanceof RuleSet
         ? $result
         : throw new \TypeError("{$class}@{$method} must return RuleSet");
