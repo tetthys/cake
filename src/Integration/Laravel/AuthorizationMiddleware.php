@@ -6,7 +6,6 @@ namespace Tetthys\Cake\Integration\Laravel;
 
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Tetthys\Cake\Rule\RuleSet;
 
 /**
@@ -120,61 +119,18 @@ final class AuthorizationMiddleware
         ?object $object,
         ?string $rulesFactory,
     ): array {
-        // Explicit "Class@method"
         if ($rulesFactory !== null) {
-            if (!str_contains($rulesFactory, "@")) {
-                abort(500, 'Invalid rules factory string. Expected "Class@method".');
-            }
-            [$class, $method] = explode("@", $rulesFactory, 2);
-            return [$class, $method];
-        }
-
-        // Parse action => [domain, method]
-        [$domain, $method] = $this->parseAction($actionName);
-
-        // Build candidate classes
-        $candidates = [];
-
-        // a) From object class (when meaningful)
-        if ($object && ($base = class_basename($object)) && $base !== "stdClass") {
-            $candidates[] = "App\\Policies\\{$base}Rules";
-        }
-
-        // b) Fallback from action domain
-        if ($domain !== null) {
-            $candidates[] = "App\\Policies\\" . Str::studly($domain) . "Rules";
-        }
-
-        // Pick the first existing class
-        foreach ($candidates as $class) {
-            if (class_exists($class)) {
-                return [$class, $method];
+            try {
+                return cakeParseRulesFactory($rulesFactory);
+            } catch (\InvalidArgumentException $e) {
+                abort(500, $e->getMessage());
             }
         }
 
-        // Nothing found → fail with a helpful message
-        $hint = $candidates
-            ? "Tried: " . implode(", ", $candidates)
-            : "No candidates could be inferred.";
-        abort(
-            500,
-            sprintf(
-                '[Cake] Could not infer policy for action "%s". %s ' .
-                    'Define one of the suggested classes or pass an explicit "Class@method".',
-                $actionName,
-                $hint,
-            ),
-        );
-    }
-
-    /** @return array{0:?string,1:string} [domain|null, method] */
-    private function parseAction(string $actionName): array
-    {
-        if (!str_contains($actionName, ".")) {
-            // No dot → no domain, entire string is method
-            return [null, $actionName];
+        try {
+            return cakeInferPolicy($actionName, $object);
+        } catch (\InvalidArgumentException $e) {
+            abort(500, $e->getMessage());
         }
-        [$domain, $method] = explode(".", $actionName, 2);
-        return [$domain, $method];
     }
 }
