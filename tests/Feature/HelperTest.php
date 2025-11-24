@@ -16,7 +16,8 @@ beforeEach(function () {
         }
     });
 
-    // Define a simple Policy used for Class@method and auto-inference tests
+    // Define a simple Policy used for auto-inference only.
+    // Auto-infer target: App\Policies\PostRules@update
     if (!class_exists(\App\Policies\PostRules::class)) {
         eval(<<<'PHP'
         namespace App\Policies;
@@ -40,23 +41,31 @@ beforeEach(function () {
         }
         PHP);
     }
+
+    // Minimal Post model for inference (class_basename(Post) => "Post")
+    if (!class_exists(\App\Models\Post::class)) {
+        eval(<<<'PHP'
+        namespace App\Models;
+
+        class Post {
+            public string $user_id;
+            public string $status;
+        }
+        PHP);
+    }
 });
 
-test('cake permits with explicit RuleSet when subject+domain match', function () {
-    $post = (object)['user_id' => 'u-1', 'status' => 'draft'];
+test('cake permits when subject+domain match via auto-inferred policy', function () {
+    // Actor is u-1 by default
+    $post = new \App\Models\Post();
+    $post->user_id = 'u-1';
+    $post->status  = 'draft';
 
-    $rules = new RuleSet([
-        new Rule(
-            'OwnerDraft',
-            Pred::S(fn($u, $a, $o, $c) => (string)$u->id === (string)$o->data->user_id),
-            Pred::D(fn($u, $a, $o, $c) => $o->data->status === 'draft'),
-        ),
-    ]);
-
-    expect(cake('post.update', $post, $rules))->toBeTrue();
+    // Auto-infers App\Policies\PostRules@update
+    expect(cake('post.update', $post))->toBeTrue();
 });
 
-test('cake denies with Class@method when not owner or not draft', function () {
+test('cake denies when not owner or not draft via auto-inferred policy', function () {
     // Switch actor → non-owner (u-2)
     $this->app->bind(ActorResolver::class, fn() => new class implements ActorResolver {
         public function fromRequest(\Illuminate\Http\Request $request): Actor
@@ -65,8 +74,12 @@ test('cake denies with Class@method when not owner or not draft', function () {
         }
     });
 
-    $post = (object)['user_id' => 'u-1', 'status' => 'published']; // domain mismatch
-    expect(cake('post.update', $post, \App\Policies\PostRules::class . '@update'))->toBeFalse();
+    $post = new \App\Models\Post();
+    $post->user_id = 'u-1';
+    $post->status  = 'published';
+
+    // Still auto-infers App\Policies\PostRules@update
+    expect(cake('post.update', $post))->toBeFalse();
 });
 
 test('cake auto-infers App\\Policies\\{Base}Rules@{method} from action+object', function () {
@@ -77,14 +90,6 @@ test('cake auto-infers App\\Policies\\{Base}Rules@{method} from action+object', 
             return new Actor('u-9', ['user']);
         }
     });
-
-    // Minimal Post model for inference
-    if (!class_exists(\App\Models\Post::class)) {
-        eval(<<<'PHP'
-        namespace App\Models;
-        class Post { public string $user_id; public string $status; }
-        PHP);
-    }
 
     $post = new \App\Models\Post();
     $post->user_id = 'u-9';
