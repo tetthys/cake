@@ -30,19 +30,12 @@ final class MiddlewareParser
     /** @var callable(string):string */
     private $candidateTransformHook;
 
-    /**
-     * @param list<string>|null $policyNamespaces
-     * @param callable(string):bool|null $classExistsHook
-     * @param callable(string):object|null $makePolicyHook
-     * @param callable(string):string|null $candidateTransformHook
-     */
     public function __construct(
         ?array $policyNamespaces = null,
         ?callable $classExistsHook = null,
         ?callable $makePolicyHook = null,
         ?callable $candidateTransformHook = null,
     ) {
-        // Default namespaces from config (production)
         if ($policyNamespaces === null) {
             $extra = config('cake.policy_namespaces', []);
             $extra = is_array($extra) ? $extra : [];
@@ -56,7 +49,6 @@ final class MiddlewareParser
 
         $this->policyNamespaces = $policyNamespaces ?: ['App\\Policies'];
 
-        // Default hooks (production)
         $this->classExistsHook = $classExistsHook
             ?? static fn(string $class): bool => class_exists($class);
 
@@ -67,11 +59,6 @@ final class MiddlewareParser
             ?? static fn(string $candidate): string => $candidate;
     }
 
-    /**
-     * Convenience factory for tests (optional).
-     *
-     * @param list<string> $policyNamespaces
-     */
     public static function forTesting(
         array $policyNamespaces = ['App\\Policies'],
         ?callable $classExistsHook = null,
@@ -86,9 +73,6 @@ final class MiddlewareParser
         );
     }
 
-    /**
-     * Prefer Eloquent model; otherwise first object-like route param; otherwise null.
-     */
     public function resolveObjectFromRoute(Request $request): ?object
     {
         $params = $request->route()?->parameters() ?? [];
@@ -110,50 +94,13 @@ final class MiddlewareParser
 
     /**
      * Auto-infer policy and build RuleSet.
+     * IMPORTANT: choose the first candidate where BOTH class and method exist.
      */
     public function resolveRulesAuto(
         Request $request,
         string $action,
         mixed $object = null,
     ): RuleSet {
-        [$policyClass, $policyMethod] = $this->inferPolicy($action, $object);
-
-        $makePolicy = $this->makePolicyHook;
-        $policy = $makePolicy($policyClass);
-
-        if (!method_exists($policy, $policyMethod)) {
-            throw new \RuntimeException(
-                sprintf(
-                    'Rules factory method "%s::%s" not found.',
-                    $policyClass,
-                    $policyMethod,
-                ),
-            );
-        }
-
-        $rules = $policy->{$policyMethod}($request);
-
-        if (!$rules instanceof RuleSet) {
-            throw new \TypeError(
-                sprintf(
-                    'Rules factory "%s::%s" must return %s.',
-                    $policyClass,
-                    $policyMethod,
-                    RuleSet::class,
-                ),
-            );
-        }
-
-        return $rules;
-    }
-
-    /**
-     * Infer policy class & method from action/object.
-     *
-     * @return array{0:string,1:string}
-     */
-    public function inferPolicy(string $action, mixed $object = null): array
-    {
         [$resourceStudly, $actionMethod] = $this->splitAction($action);
         $method = $actionMethod ?: 'index';
 
@@ -169,19 +116,80 @@ final class MiddlewareParser
         }
 
         $exists = $this->classExistsHook;
+        $make = $this->makePolicyHook;
+        $transform = $this->candidateTransformHook;
+
+        $tried = [];
+
+        foreach ($candidates as $candidate) {
+            $class = $transform($candidate);
+            $tried[] = $class . '@' . $method;
+
+            if (!$exists($class)) {
+                continue;
+            }
+
+            $policy = $make($class);
+
+            // 핵심 수정: 메서드 없으면 다음 후보로 넘어감
+            if (!method_exists($policy, $method)) {
+                continue;
+            }
+
+            $rules = $policy->{$method}($request);
+
+            if (!$rules instanceof RuleSet) {
+                throw new \TypeError(
+                    sprintf(
+                        'Rules factory "%s::%s" must return %s.',
+                        $class,
+                        $method,
+                        RuleSet::class,
+                    ),
+                );
+            }
+
+            return $rules;
+        }
+
+        throw new \InvalidArgumentException(
+            sprintf(
+                '[Cake] Could not find policy+method for action "%s". Tried: %s',
+                $action,
+                implode(', ', $tried),
+            ),
+        );
+    }
+
+    /** inferPolicy는 테스트나 별도 사용처가 있으면 남겨도 되지만, 규칙 결정을 위해선 resolveRulesAuto만 쓰면 됩니다. */
+    public function inferPolicy(string $action, mixed $object = null): array
+    {
+        [$resourceStudly, $actionMethod] = $this->splitAction($action);
+        $method = $actionMethod ?: 'index';
+
+        $candidates = $this->policyCandidates($object, $resourceStudly);
+        $exists = $this->classExistsHook;
+        $make = $this->makePolicyHook;
         $transform = $this->candidateTransformHook;
 
         foreach ($candidates as $candidate) {
             $class = $transform($candidate);
 
-            if ($exists($class)) {
-                return [$class, $method];
+            if (!$exists($class)) {
+                continue;
             }
+
+            $policy = $make($class);
+            if (!method_exists($policy, $method)) {
+                continue;
+            }
+
+            return [$class, $method];
         }
 
         throw new \InvalidArgumentException(
             sprintf(
-                '[Cake] Could not find policy for action "%s". Tried: %s',
+                '[Cake] Could not infer policy for action "%s". Tried: %s',
                 $action,
                 implode(', ', $candidates),
             ),
@@ -221,7 +229,6 @@ final class MiddlewareParser
 
         if ($object !== null) {
             $base = class_basename($object);
-
             if ($base) {
                 foreach ($this->policyNamespaces as $ns) {
                     $candidates[] = "{$ns}\\{$base}Rules";

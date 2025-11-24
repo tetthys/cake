@@ -10,6 +10,16 @@ use Tetthys\Cake\Rule\RuleSet;
 // Dummy Policies (global)
 // -------------------------
 
+// First candidate (object-based) — class exists but NO "access" method.
+class SellerRules
+{
+    public function index(Request $req): RuleSet
+    {
+        return new RuleSet([]);
+    }
+}
+
+// Second candidate (resource-based) — has "access".
 class SellerReportRules
 {
     public function access(Request $req): RuleSet
@@ -34,11 +44,42 @@ class BadRules
     }
 }
 
+// Dummy domain object to force object-based candidate = SellerRules first.
+class Seller {}
+
 // ---------------------------------------------------------
 // Tests (NO namespace; only hooks)
 // ---------------------------------------------------------
 
 describe('MiddlewareParser (test hooks only)', function () {
+
+    it('falls back to next candidate if method missing on earlier candidate', function () {
+        $instantiated = [];
+
+        $parser = MiddlewareParser::forTesting(
+            policyNamespaces: ['App\\Policies'],
+            classExistsHook: fn(string $class) =>
+            in_array($class, [SellerRules::class, SellerReportRules::class], true),
+
+            makePolicyHook: function (string $class) use (&$instantiated) {
+                $instantiated[] = $class;
+                return new $class();
+            },
+
+            candidateTransformHook: fn(string $candidate) => class_basename($candidate),
+        );
+
+        $req = Request::create('/');
+        $sellerObj = new Seller();
+
+        // Candidates order:
+        // 1) App\Policies\SellerRules  (exists, but no access method) -> must skip
+        // 2) App\Policies\SellerReportRules (exists, has access) -> should use
+        $rules = $parser->resolveRulesAuto($req, 'sellerReport.access', $sellerObj);
+
+        expect($rules)->toBeInstanceOf(RuleSet::class);
+        expect($instantiated)->toBe([SellerRules::class, SellerReportRules::class]);
+    });
 
     it('infers policy from action resource', function () {
         $parser = MiddlewareParser::forTesting(
