@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tetthys\Cake\Integration\Laravel;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Tetthys\Cake\Rule\RuleSet;
@@ -15,107 +14,102 @@ final class MiddlewareParser
     private array $policyNamespaces;
 
     /** @var callable(string):bool */
-    private $classExistsHook;
+    private $classExists;
 
     /** @var callable(string):object */
-    private $makePolicyHook;
+    private $makePolicy;
 
     /** @var callable(string):string */
-    private $candidateTransformHook;
+    private $transformCandidate;
 
     public function __construct(
         ?array $policyNamespaces = null,
-        ?callable $classExistsHook = null,
-        ?callable $makePolicyHook = null,
-        ?callable $candidateTransformHook = null,
+        ?callable $classExists = null,
+        ?callable $makePolicy = null,
+        ?callable $transformCandidate = null,
     ) {
-        if ($policyNamespaces === null) {
-            $extra = config('cake.policy_namespaces', []);
-            $extra = is_array($extra) ? $extra : [];
-            $policyNamespaces = array_merge(['App\\Policies'], $extra);
+        $extra = config('cake.policy_namespaces', []);
+        $extra = is_array($extra) ? $extra : [];
+
+        $policyNamespaces ??= array_merge(['App\\Policies'], $extra);
+
+        // English comment: Normalize namespaces (unique, non-empty, keep order)
+        $seen = [];
+        $clean = [];
+        foreach ($policyNamespaces as $ns) {
+            if (!is_string($ns) || $ns === '') {
+                continue;
+            }
+            if (isset($seen[$ns])) {
+                continue;
+            }
+            $seen[$ns] = true;
+            $clean[] = $ns;
         }
 
-        $policyNamespaces = array_values(array_unique(array_filter(
-            $policyNamespaces,
-            static fn($v): bool => is_string($v) && $v !== ''
-        )));
+        $this->policyNamespaces = $clean !== [] ? $clean : ['App\\Policies'];
 
-        $this->policyNamespaces = $policyNamespaces ?: ['App\\Policies'];
-
-        $this->classExistsHook = $classExistsHook
+        $this->classExists = $classExists
             ?? static fn(string $class): bool => class_exists($class);
 
-        $this->makePolicyHook = $makePolicyHook
+        $this->makePolicy = $makePolicy
             ?? static fn(string $class): object => app($class);
 
-        $this->candidateTransformHook = $candidateTransformHook
+        $this->transformCandidate = $transformCandidate
             ?? static fn(string $candidate): string => $candidate;
     }
 
     /**
-     * Return route objects in route-parameter order.
-     * - Prefer Eloquent models first (common case)
-     * - Then other objects
+     * Resolve route-bound objects in parameter order.
      *
      * @return list<object>
      */
     public function resolveObjectsFromRoute(Request $request): array
     {
         $params = $request->route()?->parameters() ?? [];
-
-        $models = [];
-        $objects = [];
+        $out = [];
 
         foreach ($params as $v) {
-            if ($v instanceof Model) {
-                $models[] = $v;
-                continue;
-            }
             if (is_object($v)) {
-                $objects[] = $v;
+                $out[] = $v;
             }
         }
 
-        // Keep order stable: models first is usually what you want for resource chains.
-        // If you strictly want original parameter order, remove this split and just collect in one pass.
-        return [...$models, ...$objects];
+        return $out;
     }
 
     /**
-     * Primary object = last resolved object (typical nested route: forum -> post, primary is post).
+     * Primary object = last route object (nested resources).
      */
     public function resolvePrimaryObjectFromRoute(Request $request): ?object
     {
-        $objs = $this->resolveObjectsFromRoute($request);
-        return $objs[array_key_last($objs)] ?? null;
+        $objects = $this->resolveObjectsFromRoute($request);
+        return $objects !== [] ? $objects[array_key_last($objects)] : null;
     }
 
     /**
-     * Auto-infer policy and build RuleSet.
-     * IMPORTANT: choose the first candidate where BOTH class and method exist.
+     * Infer policy + method and return RuleSet.
+     * Uses Laravel container call() for automatic dependency injection.
      */
     public function resolveRulesAuto(
         Request $request,
         string $action,
         mixed $object = null,
     ): RuleSet {
-        [$resourceStudly, $actionMethod] = $this->splitAction($action);
-        $method = $actionMethod ?: 'index';
+        [$resourceStudly, $method] = $this->splitAction($action);
+        $method ??= 'index';
 
         $candidates = $this->policyCandidates($object, $resourceStudly);
 
-        if (!$candidates) {
+        if ($candidates === []) {
             throw new \InvalidArgumentException(
-                sprintf(
-                    '[Cake] Cannot infer policy class for action "%s". Provide an object/resource.',
-                    $action,
-                ),
+                sprintf('[Cake] Cannot infer policy for action "%s".', $action),
             );
         }
 
-        $exists = $this->classExistsHook;
-        $make = $this->makePolicyHook;
-        $transform = $this->candidateTransformHook;
+        $exists = $this->classExists;
+        $make = $this->makePolicy;
+        $transform = $this->transformCandidate;
 
         $tried = [];
 
@@ -133,7 +127,12 @@ final class MiddlewareParser
                 continue;
             }
 
-            $rules = $policy->{$method}($request);
+            // English comment: Use container call for Laravel-style auto injection
+            $rules = app()->call([$policy, $method], [
+                'request' => $request,
+                'object'  => $object,
+                'action'  => $action,
+            ]);
 
             if (!$rules instanceof RuleSet) {
                 throw new \TypeError(
@@ -151,7 +150,7 @@ final class MiddlewareParser
 
         throw new \InvalidArgumentException(
             sprintf(
-                '[Cake] Could not find policy+method for action "%s". Tried: %s',
+                '[Cake] No matching policy method for action "%s". Tried: %s',
                 $action,
                 implode(', ', $tried),
             ),
@@ -169,7 +168,7 @@ final class MiddlewareParser
 
         return [
             $this->normalizeResource($resource),
-            $method ?: null,
+            $method !== '' ? $method : null,
         ];
     }
 
@@ -184,26 +183,39 @@ final class MiddlewareParser
         return Str::studly($resource);
     }
 
-    /** @return list<string> */
+    /**
+     * Build policy class candidates with minimal allocations.
+     *
+     * @return list<string>
+     */
     private function policyCandidates(mixed $object, ?string $resourceStudly): array
     {
-        $candidates = [];
+        $out = [];
+        $seen = [];
 
         if ($object !== null) {
             $base = class_basename($object);
-            if ($base) {
+            if (is_string($base) && $base !== '') {
                 foreach ($this->policyNamespaces as $ns) {
-                    $candidates[] = "{$ns}\\{$base}Rules";
+                    $c = $ns . '\\' . $base . 'Rules';
+                    if (!isset($seen[$c])) {
+                        $seen[$c] = true;
+                        $out[] = $c;
+                    }
                 }
             }
         }
 
-        if ($resourceStudly) {
+        if ($resourceStudly !== null && $resourceStudly !== '') {
             foreach ($this->policyNamespaces as $ns) {
-                $candidates[] = "{$ns}\\{$resourceStudly}Rules";
+                $c = $ns . '\\' . $resourceStudly . 'Rules';
+                if (!isset($seen[$c])) {
+                    $seen[$c] = true;
+                    $out[] = $c;
+                }
             }
         }
 
-        return array_values(array_unique($candidates));
+        return $out;
     }
 }
