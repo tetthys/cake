@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tetthys\Cake\Integration\Laravel;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Tetthys\Cake\Rule\RuleSet;
 
@@ -22,6 +23,25 @@ final class MiddlewareParser
     /** @var callable(string):string */
     private $transformCandidate;
 
+    /** @var array<string, list<string>> */
+    private array $candidatesCache = [];
+
+    /** @var array<string, string> */
+    private array $winnerCache = []; // key => "Class@method"
+
+    /** @var array<string, bool> */
+    private array $classExistsCache = [];
+
+    /** @var array<string, bool> */
+    private array $methodExistsCache = [];
+
+    /** @var array<string, object> */
+    private array $policyInstanceCache = [];
+
+    private bool $usePersistentCache;
+    private string $cachePrefix;
+    private int $cacheTtlSeconds;
+
     public function __construct(
         ?array $policyNamespaces = null,
         ?callable $classExists = null,
@@ -37,26 +57,41 @@ final class MiddlewareParser
         $seen = [];
         $clean = [];
         foreach ($policyNamespaces as $ns) {
-            if (!is_string($ns) || $ns === '') {
-                continue;
-            }
-            if (isset($seen[$ns])) {
+            if (!is_string($ns) || $ns === '' || isset($seen[$ns])) {
                 continue;
             }
             $seen[$ns] = true;
             $clean[] = $ns;
         }
+        $this->policyNamespaces = $clean ?: ['App\\Policies'];
 
-        $this->policyNamespaces = $clean !== [] ? $clean : ['App\\Policies'];
+        $this->classExists = $classExists ?? static fn(string $class): bool => class_exists($class);
+        $this->makePolicy = $makePolicy ?? static fn(string $class): object => app($class);
+        $this->transformCandidate = $transformCandidate ?? static fn(string $candidate): string => $candidate;
 
-        $this->classExists = $classExists
-            ?? static fn(string $class): bool => class_exists($class);
+        $cacheEnabled = config('cake.cache.enabled');
+        $this->usePersistentCache = is_bool($cacheEnabled)
+            ? $cacheEnabled
+            : app()->isProduction();
 
-        $this->makePolicy = $makePolicy
-            ?? static fn(string $class): object => app($class);
+        $this->cachePrefix = $this->buildDeployAwarePrefix();
+        $this->cacheTtlSeconds = (int) config('cake.cache.ttl_seconds', 3600);
+    }
 
-        $this->transformCandidate = $transformCandidate
-            ?? static fn(string $candidate): string => $candidate;
+    private function buildDeployAwarePrefix(): string
+    {
+        $base = (string) config('cake.cache.prefix', 'cake:policy-map:');
+        $env = app()->environment();
+
+        // English comment: Prefer deploy_id (commit hash/build id), fallback to version
+        $deployId = (string) (config('app.deploy_id') ?? '');
+        $version = (string) (config('app.version') ?? '');
+        $deployMarker = $deployId !== '' ? $deployId : ($version !== '' ? $version : 'unknown');
+
+        // English comment: Avoid collisions on shared cache stores
+        $appKeyHash = sha1((string) config('app.key', 'nokey'));
+
+        return $base . $env . ':' . $deployMarker . ':' . $appKeyHash;
     }
 
     /**
@@ -78,82 +113,70 @@ final class MiddlewareParser
         return $out;
     }
 
-    /**
-     * Primary object = last route object (nested resources).
-     */
     public function resolvePrimaryObjectFromRoute(Request $request): ?object
     {
         $objects = $this->resolveObjectsFromRoute($request);
         return $objects !== [] ? $objects[array_key_last($objects)] : null;
     }
 
-    /**
-     * Infer policy + method and return RuleSet.
-     * Uses Laravel container call() for automatic dependency injection.
-     */
-    public function resolveRulesAuto(
-        Request $request,
-        string $action,
-        mixed $object = null,
-    ): RuleSet {
+    public function resolveRulesAuto(Request $request, string $action, mixed $object = null): RuleSet
+    {
         [$resourceStudly, $method] = $this->splitAction($action);
         $method ??= 'index';
 
-        $candidates = $this->policyCandidates($object, $resourceStudly);
+        $objectClass = is_object($object) ? $object::class : '';
+        $winnerKey = $this->winnerKey($action, $method, $objectClass, $resourceStudly);
 
-        if ($candidates === []) {
-            throw new \InvalidArgumentException(
-                sprintf('[Cake] Cannot infer policy for action "%s".', $action),
-            );
+        // 1) Request-local fast path
+        if (isset($this->winnerCache[$winnerKey])) {
+            return $this->callRules($this->winnerCache[$winnerKey], $request, $action, $object);
         }
 
-        $exists = $this->classExists;
-        $make = $this->makePolicy;
-        $transform = $this->transformCandidate;
+        // 2) Persistent cache fast path (enabled env only)
+        if ($this->usePersistentCache) {
+            $cached = Cache::get($winnerKey);
+            if (is_string($cached) && str_contains($cached, '@')) {
+                $this->winnerCache[$winnerKey] = $cached;
+                return $this->callRules($cached, $request, $action, $object);
+            }
+        }
+
+        // 3) Compute mapping
+        $candidates = $this->policyCandidatesCached($object, $resourceStudly);
+
+        if ($candidates === []) {
+            throw new \InvalidArgumentException(sprintf('[Cake] Cannot infer policy for action "%s".', $action));
+        }
 
         $tried = [];
 
         foreach ($candidates as $candidate) {
-            $class = $transform($candidate);
+            $class = ($this->transformCandidate)($candidate);
             $tried[] = $class . '@' . $method;
 
-            if (!$exists($class)) {
+            if (!$this->classExistsCached($class)) {
                 continue;
             }
 
-            $policy = $make($class);
+            $policy = $this->policy($class);
 
-            if (!method_exists($policy, $method)) {
+            if (!$this->methodExistsCached($policy, $class, $method)) {
                 continue;
             }
 
-            // English comment: Use container call for Laravel-style auto injection
-            $rules = app()->call([$policy, $method], [
-                'request' => $request,
-                'object'  => $object,
-                'action'  => $action,
-            ]);
+            $winner = $class . '@' . $method;
 
-            if (!$rules instanceof RuleSet) {
-                throw new \TypeError(
-                    sprintf(
-                        'Rules factory "%s::%s" must return %s.',
-                        $class,
-                        $method,
-                        RuleSet::class,
-                    ),
-                );
+            $this->winnerCache[$winnerKey] = $winner;
+
+            if ($this->usePersistentCache) {
+                Cache::put($winnerKey, $winner, $this->cacheTtlSeconds);
             }
 
-            return $rules;
+            return $this->callRules($winner, $request, $action, $object);
         }
 
         throw new \InvalidArgumentException(
-            sprintf(
-                '[Cake] No matching policy method for action "%s". Tried: %s',
-                $action,
-                implode(', ', $tried),
-            ),
+            sprintf('[Cake] No matching policy method for action "%s". Tried: %s', $action, implode(', ', $tried)),
         );
     }
 
@@ -179,21 +202,31 @@ final class MiddlewareParser
         }
 
         $resource = str_replace(['-', '_'], ' ', $resource);
-
         return Str::studly($resource);
     }
 
+    private function winnerKey(string $action, string $method, string $objectClass, ?string $resourceStudly): string
+    {
+        $raw = $action . '|' . $method . '|' . $objectClass . '|' . ($resourceStudly ?? '');
+        return $this->cachePrefix . ':winner:' . sha1($raw);
+    }
+
     /**
-     * Build policy class candidates with minimal allocations.
-     *
      * @return list<string>
      */
-    private function policyCandidates(mixed $object, ?string $resourceStudly): array
+    private function policyCandidatesCached(mixed $object, ?string $resourceStudly): array
     {
+        $objectClass = is_object($object) ? $object::class : '';
+        $key = $objectClass . '|' . ($resourceStudly ?? '');
+
+        if (isset($this->candidatesCache[$key])) {
+            return $this->candidatesCache[$key];
+        }
+
         $out = [];
         $seen = [];
 
-        if ($object !== null) {
+        if ($objectClass !== '') {
             $base = class_basename($object);
             if (is_string($base) && $base !== '') {
                 foreach ($this->policyNamespaces as $ns) {
@@ -216,6 +249,66 @@ final class MiddlewareParser
             }
         }
 
-        return $out;
+        return $this->candidatesCache[$key] = $out;
+    }
+
+    private function classExistsCached(string $class): bool
+    {
+        return $this->classExistsCache[$class]
+            ??= ($this->classExists)($class);
+    }
+
+    private function policy(string $class): object
+    {
+        return $this->policyInstanceCache[$class]
+            ??= ($this->makePolicy)($class);
+    }
+
+    private function methodExistsCached(object $policy, string $class, string $method): bool
+    {
+        $key = $class . '::' . $method;
+
+        return $this->methodExistsCache[$key]
+            ??= method_exists($policy, $method);
+    }
+
+    private function callRules(string $winner, Request $request, string $action, mixed $object): RuleSet
+    {
+        [$class, $method] = explode('@', $winner, 2);
+
+        if (!$this->classExistsCached($class)) {
+            $this->forgetWinnerKey($action, $method, is_object($object) ? $object::class : '', null);
+            throw new \InvalidArgumentException(sprintf('[Cake] Policy class missing: %s', $class));
+        }
+
+        $policy = $this->policy($class);
+
+        if (!$this->methodExistsCached($policy, $class, $method)) {
+            $this->forgetWinnerKey($action, $method, is_object($object) ? $object::class : '', null);
+            throw new \InvalidArgumentException(sprintf('[Cake] Policy method missing: %s::%s', $class, $method));
+        }
+
+        $rules = app()->call([$policy, $method], [
+            'request' => $request,
+            'object'  => $object,
+            'action'  => $action,
+        ]);
+
+        if (!$rules instanceof RuleSet) {
+            throw new \TypeError(sprintf('Rules factory "%s::%s" must return %s.', $class, $method, RuleSet::class));
+        }
+
+        return $rules;
+    }
+
+    private function forgetWinnerKey(string $action, string $method, string $objectClass, ?string $resourceStudly): void
+    {
+        $key = $this->winnerKey($action, $method, $objectClass, $resourceStudly);
+
+        unset($this->winnerCache[$key]);
+
+        if ($this->usePersistentCache) {
+            Cache::forget($key);
+        }
     }
 }
