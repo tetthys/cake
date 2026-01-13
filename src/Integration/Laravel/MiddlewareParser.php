@@ -4,18 +4,11 @@ declare(strict_types=1);
 
 namespace Tetthys\Cake\Integration\Laravel;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Tetthys\Cake\Rule\RuleSet;
 
-/**
- * MiddlewareParser (auto-infer only)
- *
- * Test hooks:
- *  - $classExistsHook: callable(string $class): bool
- *  - $makePolicyHook: callable(string $class): object
- *  - $candidateTransformHook: callable(string $candidateClass): string
- */
 final class MiddlewareParser
 {
     /** @var list<string> */
@@ -44,7 +37,7 @@ final class MiddlewareParser
 
         $policyNamespaces = array_values(array_unique(array_filter(
             $policyNamespaces,
-            fn($v) => is_string($v) && $v !== ''
+            static fn($v): bool => is_string($v) && $v !== ''
         )));
 
         $this->policyNamespaces = $policyNamespaces ?: ['App\\Policies'];
@@ -59,37 +52,42 @@ final class MiddlewareParser
             ?? static fn(string $candidate): string => $candidate;
     }
 
-    public static function forTesting(
-        array $policyNamespaces = ['App\\Policies'],
-        ?callable $classExistsHook = null,
-        ?callable $makePolicyHook = null,
-        ?callable $candidateTransformHook = null,
-    ): self {
-        return new self(
-            policyNamespaces: $policyNamespaces,
-            classExistsHook: $classExistsHook,
-            makePolicyHook: $makePolicyHook,
-            candidateTransformHook: $candidateTransformHook,
-        );
-    }
-
-    public function resolveObjectFromRoute(Request $request): ?object
+    /**
+     * Return route objects in route-parameter order.
+     * - Prefer Eloquent models first (common case)
+     * - Then other objects
+     *
+     * @return list<object>
+     */
+    public function resolveObjectsFromRoute(Request $request): array
     {
         $params = $request->route()?->parameters() ?? [];
 
-        foreach ($params as $v) {
-            if ($v instanceof \Illuminate\Database\Eloquent\Model) {
-                return $v;
-            }
-        }
+        $models = [];
+        $objects = [];
 
         foreach ($params as $v) {
+            if ($v instanceof Model) {
+                $models[] = $v;
+                continue;
+            }
             if (is_object($v)) {
-                return $v;
+                $objects[] = $v;
             }
         }
 
-        return null;
+        // Keep order stable: models first is usually what you want for resource chains.
+        // If you strictly want original parameter order, remove this split and just collect in one pass.
+        return [...$models, ...$objects];
+    }
+
+    /**
+     * Primary object = last resolved object (typical nested route: forum -> post, primary is post).
+     */
+    public function resolvePrimaryObjectFromRoute(Request $request): ?object
+    {
+        $objs = $this->resolveObjectsFromRoute($request);
+        return $objs[array_key_last($objs)] ?? null;
     }
 
     /**
@@ -131,7 +129,6 @@ final class MiddlewareParser
 
             $policy = $make($class);
 
-            // 핵심 수정: 메서드 없으면 다음 후보로 넘어감
             if (!method_exists($policy, $method)) {
                 continue;
             }
@@ -157,41 +154,6 @@ final class MiddlewareParser
                 '[Cake] Could not find policy+method for action "%s". Tried: %s',
                 $action,
                 implode(', ', $tried),
-            ),
-        );
-    }
-
-    /** inferPolicy는 테스트나 별도 사용처가 있으면 남겨도 되지만, 규칙 결정을 위해선 resolveRulesAuto만 쓰면 됩니다. */
-    public function inferPolicy(string $action, mixed $object = null): array
-    {
-        [$resourceStudly, $actionMethod] = $this->splitAction($action);
-        $method = $actionMethod ?: 'index';
-
-        $candidates = $this->policyCandidates($object, $resourceStudly);
-        $exists = $this->classExistsHook;
-        $make = $this->makePolicyHook;
-        $transform = $this->candidateTransformHook;
-
-        foreach ($candidates as $candidate) {
-            $class = $transform($candidate);
-
-            if (!$exists($class)) {
-                continue;
-            }
-
-            $policy = $make($class);
-            if (!method_exists($policy, $method)) {
-                continue;
-            }
-
-            return [$class, $method];
-        }
-
-        throw new \InvalidArgumentException(
-            sprintf(
-                '[Cake] Could not infer policy for action "%s". Tried: %s',
-                $action,
-                implode(', ', $candidates),
             ),
         );
     }

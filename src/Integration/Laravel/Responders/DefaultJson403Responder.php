@@ -12,13 +12,6 @@ use Tetthys\Cake\Model\Action;
 use Tetthys\Cake\Model\Context;
 use Tetthys\Cake\Model\ObjectRef;
 
-/**
- * DefaultJson403Responder
- *
- * Backward-compatible default:
- * - Permit  -> return Decision
- * - Deny    -> throw HttpResponseException(JSON 403 with trace)
- */
 final class DefaultJson403Responder implements AuthorizationResponder
 {
     public function respond(
@@ -32,17 +25,34 @@ final class DefaultJson403Responder implements AuthorizationResponder
             return $decision;
         }
 
+        $debug = (bool) config('app.debug');
+
+        $payload = [
+            "message" => "Forbidden",
+            "authorization" => [
+                "action" => $action->name, // assuming Action exposes ->name
+            ],
+        ];
+
+        if ($debug) {
+            $payload["authorization"]["trace"] = $decision->trace ?? null;
+            $payload["authorization"]["context"] = [
+                "route" => $context->get("route"),
+                "method" => $context->get("method"),
+                "path" => $context->get("path"),
+                "resources" => array_map(
+                    static fn($r) => (string) $r,
+                    $context->get("resources", []),
+                ),
+                "parents" => array_map(
+                    static fn($r) => (string) $r,
+                    $context->get("parents", []),
+                ),
+            ];
+        }
+
         throw new HttpResponseException(
-            response()->json(
-                [
-                    "message" => "Forbidden",
-                    "authorization" => [
-                        "action" => $action->name, // assuming Action exposes ->name
-                        "trace" => $decision->trace, // explain why it was denied
-                    ],
-                ],
-                403,
-            ),
+            response()->json($payload, 403),
         );
     }
 }

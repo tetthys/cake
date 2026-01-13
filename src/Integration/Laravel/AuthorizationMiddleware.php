@@ -17,8 +17,8 @@ final class AuthorizationMiddleware
         $parser = app(MiddlewareParser::class);
 
         try {
-            $object = $parser->resolveObjectFromRoute($request);
-            $rules  = $parser->resolveRulesAuto($request, $actionName, $object);
+            $primary = $parser->resolvePrimaryObjectFromRoute($request);
+            $rules   = $parser->resolveRulesAuto($request, $actionName, $primary);
         } catch (\Throwable $e) {
             abort(500, $e->getMessage());
         }
@@ -30,7 +30,7 @@ final class AuthorizationMiddleware
         $trait->authorizeWithCake(
             $request,
             $actionName,
-            $object ?? new \stdClass(),
+            $primary ?? new \stdClass(),
             $rules,
         );
 
